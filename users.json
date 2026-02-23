@@ -1,0 +1,9 @@
+[
+  {
+    "name": "老婆",
+    "email": "填入邮箱地址",
+    "us_stocks": ["AAPL", "TSLA", "NVDA"],
+    "hk_stocks": ["00700.HK", "09988.HK"],
+    "a_stocks": ["600519", "300750"]
+  }
+]

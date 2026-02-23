@@ -14,6 +14,11 @@
 
 import os
 import sys
+import json
+import re
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 import requests
 import yfinance as yf
 import akshare as ak
@@ -26,8 +31,12 @@ import time
 # 配置区域
 # ============================================================
 
-PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
+PUSHPLUS_TOKEN    = os.environ.get("PUSHPLUS_TOKEN", "")
 DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY", "")
+SMTP_HOST         = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT         = int(os.environ.get("SMTP_PORT", "587"))
+SMTP_USER         = os.environ.get("SMTP_USER", "")
+SMTP_PASSWORD     = os.environ.get("SMTP_PASSWORD", "")
 
 PRICE_CHANGE_THRESHOLD = 4.0  # 盘中涨跌幅阈值（%）
 VOLUME_MULTIPLIER      = 1.8  # 收盘后成交量倍数阈值
@@ -77,6 +86,47 @@ def send_to_wechat(title, content):
             print(f"  ❌ 推送失败：{data.get('msg')} | {title}")
     except Exception as e:
         print(f"  ❌ 推送异常：{e}")
+
+
+def send_email(to_addr, subject, content_md):
+    """将 Markdown 内容转为 HTML 发送邮件"""
+    if not all([SMTP_USER, SMTP_PASSWORD]):
+        print(f"⚠️ 未配置SMTP，跳过邮件: {subject}")
+        return
+    # 简单 Markdown → HTML 转换
+    html = content_md
+    html = html.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    html = re.sub(r'^## (.+)$', r'<h2>\1</h2>', html, flags=re.MULTILINE)
+    html = re.sub(r'^### (.+)$', r'<h3>\1</h3>', html, flags=re.MULTILINE)
+    html = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', html)
+    html = html.replace('\n---\n', '<hr>')
+    html = html.replace('\n', '<br>')
+    html = f'<html><body style="font-family:sans-serif;max-width:640px;margin:0 auto;line-height:1.6">{html}</body></html>'
+
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"]    = SMTP_USER
+        msg["To"]      = to_addr
+        msg.attach(MIMEText(content_md, "plain", "utf-8"))
+        msg.attach(MIMEText(html, "html", "utf-8"))
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.sendmail(SMTP_USER, to_addr, msg.as_string())
+        print(f"  ✅ 邮件发送成功：{to_addr} | {subject}")
+    except Exception as e:
+        print(f"  ❌ 邮件发送失败：{e}")
+
+
+def load_users():
+    """读取 users.json，返回用户列表"""
+    try:
+        with open("users.json", "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"⚠️ 读取 users.json 失败: {e}")
+        return []
 
 
 # ============================================================
@@ -495,8 +545,10 @@ def get_news_summary(symbol, name, market):
         return "新闻摘要获取失败"
 
 
-def get_daily_data_us():
+def get_daily_data_us(symbols=None):
     """并发获取美股日报数据：收盘价、涨跌幅、成交量、7日均量"""
+    if symbols is None:
+        symbols = US_STOCKS
     def _fetch(symbol):
         try:
             hist = yf.Ticker(symbol).history(period="15d")
@@ -524,7 +576,7 @@ def get_daily_data_us():
 
     results = []
     with ThreadPoolExecutor(max_workers=8) as executor:
-        futures = {executor.submit(_fetch, s): s for s in US_STOCKS}
+        futures = {executor.submit(_fetch, s): s for s in symbols}
         for future in as_completed(futures):
             r = future.result()
             if r:
@@ -532,9 +584,11 @@ def get_daily_data_us():
     return results
 
 
-def get_daily_data_hk():
+def get_daily_data_hk(stock_list=None):
     """获取港股日报数据：实时快照 + 7日均量（akshare）"""
-    hk_codes   = [s.replace(".HK", "") for s in HK_STOCKS]
+    if stock_list is None:
+        stock_list = HK_STOCKS
+    hk_codes   = [s.replace(".HK", "") for s in stock_list]
     end_date   = datetime.now().strftime("%Y%m%d")
     start_date = (datetime.now() - timedelta(days=20)).strftime("%Y%m%d")
 
@@ -593,8 +647,10 @@ def get_daily_data_hk():
     return results
 
 
-def get_daily_data_a():
+def get_daily_data_a(stock_list=None):
     """获取A股日报数据：实时快照 + 7日均量（akshare）"""
+    if stock_list is None:
+        stock_list = A_STOCKS
     end_date   = datetime.now().strftime("%Y%m%d")
     start_date = (datetime.now() - timedelta(days=20)).strftime("%Y%m%d")
 
@@ -602,7 +658,7 @@ def get_daily_data_a():
     for attempt in range(3):
         try:
             spot_df = ak.stock_zh_a_spot_em()
-            spot_df = spot_df[spot_df["代码"].isin(A_STOCKS)].copy()
+            spot_df = spot_df[spot_df["代码"].isin(stock_list)].copy()
             for _, row in spot_df.iterrows():
                 spot_map[row["代码"]] = {
                     "name":       row["名称"],
@@ -653,20 +709,32 @@ def get_daily_data_a():
     return results
 
 
-def run_daily_report(market):
-    """日报模式：每支股票展示股价/涨跌/成交量/7日均量 + ChatGPT新闻摘要，汇总推送一条"""
+def run_daily_report(market, user=None):
+    """
+    日报模式：每支股票展示股价/涨跌/成交量/7日均量 + Qwen新闻摘要，汇总推送一条。
+    user=None  → owner，使用全局股票列表，通过 PushPlus 推送微信
+    user=dict  → 外部用户，使用其自定义列表，通过 Email 推送
+    """
     market_name = {"a": "A股", "hk": "港股", "us": "美股"}[market]
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] 生成{market_name}日报...")
+    tag = f"（{user['name']}）" if user else ""
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] 生成{market_name}日报{tag}...")
+
+    if user:
+        us_list = user.get("us_stocks") or []
+        hk_list = user.get("hk_stocks") or []
+        a_list  = user.get("a_stocks")  or []
+    else:
+        us_list = hk_list = a_list = None  # 使用全局默认列表
 
     if market == "a":
-        stocks = get_daily_data_a()
+        stocks = get_daily_data_a(a_list)
     elif market == "hk":
-        stocks = get_daily_data_hk()
+        stocks = get_daily_data_hk(hk_list)
     else:
-        stocks = get_daily_data_us()
+        stocks = get_daily_data_us(us_list)
 
     if not stocks:
-        print(f"{market_name}无数据，跳过日报")
+        print(f"{market_name}无数据，跳过日报{tag}")
         return
 
     stocks = sorted(stocks, key=lambda x: -x["change_pct"])
@@ -686,15 +754,26 @@ def run_daily_report(market):
         time.sleep(0.3)
 
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+    title   = f"📋 {market_name}日报 {datetime.now().strftime('%Y-%m-%d')}"
     content = "\n\n---\n\n".join([
         f"## 📋 {market_name}日报（{now_str}）\n共 **{len(stocks)}** 支股票",
     ] + blocks)
 
-    send_to_wechat(
-        f"📋 {market_name}日报 {datetime.now().strftime('%Y-%m-%d')}",
-        content
-    )
-    print(f"{market_name}日报已推送，共 {len(stocks)} 支股票")
+    if user:
+        send_email(user["email"], title, content)
+    else:
+        send_to_wechat(title, content)
+
+    print(f"{market_name}日报已推送{tag}，共 {len(stocks)} 支股票")
+
+
+def run_daily_report_all(market):
+    """依次为 owner 和 users.json 中所有用户生成并推送日报"""
+    # owner：PushPlus 微信推送
+    run_daily_report(market)
+    # 外部用户：Email 推送
+    for user in load_users():
+        run_daily_report(market, user=user)
 
 
 # ============================================================
@@ -713,11 +792,11 @@ if __name__ == "__main__":
     elif mode == "close_us":
         run_close_check("us")
     elif mode == "daily_a":
-        run_daily_report("a")
+        run_daily_report_all("a")
     elif mode == "daily_hk":
-        run_daily_report("hk")
+        run_daily_report_all("hk")
     elif mode == "daily_us":
-        run_daily_report("us")
+        run_daily_report_all("us")
     else:
         print(f"未知模式：{mode}，可选：intraday / close_a / close_hk / close_us / daily_a / daily_hk / daily_us")
         sys.exit(1)
