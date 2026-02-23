@@ -50,7 +50,7 @@ A_STOCKS = [
 ]
 
 # ============================================================
-# 推送（PushPlus）
+# 推送（PushPlus）——汇总模式，一次发一条
 # ============================================================
 
 def send_to_wechat(title, content):
@@ -111,43 +111,79 @@ def get_intraday_us(symbols):
 
 
 def get_intraday_hk():
-    """用 akshare 拉取港股实时价 vs 昨日收盘（单次批量请求，已够快）"""
-    results = []
-    hk_codes = [s.replace(".HK", "") for s in HK_STOCKS]
-    try:
-        spot_df = ak.stock_hk_spot_em()
-        spot_df = spot_df[spot_df["代码"].isin(hk_codes)].copy()
-        for _, row in spot_df.iterrows():
-            prev_close = float(row["昨收"])
-            current    = float(row["最新价"])
-            if prev_close == 0:
-                continue
+    """并发拉取港股实时价（逐支，避免批量接口慢速分页）"""
+    def _fetch(symbol):
+        try:
+            fi = yf.Ticker(symbol).fast_info
+            current    = fi.last_price
+            prev_close = fi.previous_close
+            if not current or not prev_close or prev_close == 0:
+                return None
+            # 从 akshare 格式映射名称（仅在有数据时）
             change_pct = (current - prev_close) / prev_close * 100
-            results.append({
-                "symbol":     row["代码"] + ".HK",
-                "name":       row["名称"],
-                "price":      round(current, 3),
-                "prev_close": round(prev_close, 3),
-                "change_pct": round(change_pct, 2),
+            return {
+                "symbol":     symbol,
+                "name":       symbol.replace(".HK", ""),
+                "price":      round(float(current), 3),
+                "prev_close": round(float(prev_close), 3),
+                "change_pct": round(float(change_pct), 2),
                 "market":     "港股",
-            })
-    except Exception as e:
-        print(f"港股实时行情获取失败: {e}")
+            }
+        except Exception as e:
+            print(f"  ⚠️  {symbol} 港股实时数据获取失败: {e}")
+            return None
+
+    results = []
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {executor.submit(_fetch, s): s for s in HK_STOCKS}
+        for future in as_completed(futures):
+            r = future.result()
+            if r:
+                results.append(r)
     return results
 
 
 def get_intraday_a():
-    """用 akshare 实时行情获取A股涨跌幅（单次批量请求，已够快）"""
+    """并发拉取A股实时价（逐支，避免批量接口慢速分页）"""
+    def _fetch(code):
+        try:
+            # akshare 单支实时行情：返回 DataFrame，取最新一行
+            df = ak.stock_zh_a_spot_em()
+            row = df[df["代码"] == code]
+            if row.empty:
+                return None
+            row = row.iloc[0]
+            prev_close = float(row["昨收"])
+            current    = float(row["最新价"])
+            if prev_close == 0:
+                return None
+            return {
+                "symbol":     code,
+                "name":       row["名称"],
+                "price":      round(current, 3),
+                "prev_close": round(prev_close, 3),
+                "change_pct": round(float(row["涨跌幅"]), 2),
+                "market":     "A股",
+            }
+        except Exception as e:
+            print(f"  ⚠️  A股 {code} 实时数据获取失败: {e}")
+            return None
+
+    # A股数量少(15支)，先批量拉一次再过滤（akshare无单支实时接口）
     results = []
     try:
         spot_df = ak.stock_zh_a_spot_em()
         spot_df = spot_df[spot_df["代码"].isin(A_STOCKS)].copy()
         for _, row in spot_df.iterrows():
+            prev_close = float(row["昨收"])
+            current    = float(row["最新价"])
+            if prev_close == 0:
+                continue
             results.append({
                 "symbol":     row["代码"],
                 "name":       row["名称"],
-                "price":      round(float(row["最新价"]), 3),
-                "prev_close": round(float(row["昨收"]), 3),
+                "price":      round(current, 3),
+                "prev_close": round(prev_close, 3),
                 "change_pct": round(float(row["涨跌幅"]), 2),
                 "market":     "A股",
             })
@@ -157,40 +193,49 @@ def get_intraday_a():
 
 
 def run_intraday():
-    """盘中模式：实时价 vs 昨日收盘，涨跌幅 > ±4% 推送"""
+    """盘中模式：实时价 vs 昨日收盘，涨跌幅 > ±4%，汇总推送一条"""
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] 盘中实时监控...")
 
     all_stocks = []
     print("获取美股实时数据（并发）...")
     all_stocks.extend(get_intraday_us(US_STOCKS))
-    print("获取港股实时数据...")
+    print("获取港股实时数据（并发）...")
     all_stocks.extend(get_intraday_hk())
     print("获取A股实时数据...")
     all_stocks.extend(get_intraday_a())
     print(f"成功获取 {len(all_stocks)} 支股票实时数据")
 
-    alert_count = 0
-    for stock in all_stocks:
+    # 收集所有触发项
+    alert_lines = []
+    for stock in sorted(all_stocks, key=lambda x: -abs(x["change_pct"])):
         if abs(stock["change_pct"]) < PRICE_CHANGE_THRESHOLD:
             continue
-        direction = "大涨" if stock["change_pct"] > 0 else "大跌"
-        emoji     = "📈" if stock["change_pct"] > 0 else "📉"
-        content = "\n".join([
-            f"## {emoji} {stock['name']}（{stock['symbol']}）",
-            f"**市场**：{stock['market']}",
-            f"**当前价**：{stock['price']}",
-            f"**昨日收盘**：{stock['prev_close']}",
-            f"**今日涨跌**：{stock['change_pct']:+.2f}%",
-            f"**推送时间**：{datetime.now().strftime('%Y-%m-%d %H:%M')}",
-            "",
-            "### 触发原因",
-            f"📊 条件1 盘中{direction}：涨跌幅 {stock['change_pct']:+.2f}%（阈值 ±{PRICE_CHANGE_THRESHOLD}%）",
-        ])
-        send_to_wechat(f"{emoji} {stock['name']}（{stock['symbol']}）盘中异动", content)
-        alert_count += 1
-        time.sleep(1)
+        emoji = "📈" if stock["change_pct"] > 0 else "📉"
+        alert_lines.append(
+            f"| {emoji} {stock['name']}（{stock['symbol']}）"
+            f" | {stock['market']}"
+            f" | {stock['price']}"
+            f" | **{stock['change_pct']:+.2f}%** |"
+        )
 
-    print(f"共推送 {alert_count} 条盘中异动" if alert_count else "无盘中异动触发")
+    if not alert_lines:
+        print("无盘中异动触发")
+        return
+
+    now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+    content = "\n".join([
+        f"## 📊 盘中异动汇总（{now_str}）",
+        f"共 **{len(alert_lines)}** 支股票涨跌幅超过 ±{PRICE_CHANGE_THRESHOLD}%",
+        "",
+        "| 股票 | 市场 | 现价 | 涨跌幅 |",
+        "|------|------|------|--------|",
+    ] + alert_lines)
+
+    send_to_wechat(
+        f"📊 盘中异动 {len(alert_lines)} 支（{now_str}）",
+        content
+    )
+    print(f"共 {len(alert_lines)} 条异动，已汇总推送")
 
 
 # ============================================================
@@ -248,7 +293,11 @@ def get_close_data_hk():
         spot_df = ak.stock_hk_spot_em()
         spot_df = spot_df[spot_df["代码"].isin(hk_codes)].copy()
         for _, row in spot_df.iterrows():
-            spot_map[row["代码"]] = {"name": row["名称"], "price": float(row["最新价"]), "volume": float(row["成交量"])}
+            spot_map[row["代码"]] = {
+                "name":   row["名称"],
+                "price":  float(row["最新价"]),
+                "volume": float(row["成交量"]),
+            }
     except Exception as e:
         print(f"港股实时行情获取失败: {e}")
         return []
@@ -305,7 +354,11 @@ def get_close_data_a():
         spot_df = ak.stock_zh_a_spot_em()
         spot_df = spot_df[spot_df["代码"].isin(A_STOCKS)].copy()
         for _, row in spot_df.iterrows():
-            spot_map[row["代码"]] = {"name": row["名称"], "price": float(row["最新价"]), "volume": float(row["成交量"])}
+            spot_map[row["代码"]] = {
+                "name":   row["名称"],
+                "price":  float(row["最新价"]),
+                "volume": float(row["成交量"]),
+            }
     except Exception as e:
         print(f"A股实时行情获取失败: {e}")
         return []
@@ -356,13 +409,11 @@ def check_close_alerts(stock):
     triggered = []
     price = stock["price"]
 
-    # 条件2：价格创近30天新高/新低
     if price >= stock["max_30d"]:
         triggered.append(f"🏔️ 条件2 收盘创近30天新高：{price} ≥ 30日最高 {stock['max_30d']}")
     elif price <= stock["min_30d"]:
         triggered.append(f"🕳️ 条件2 收盘创近30天新低：{price} ≤ 30日最低 {stock['min_30d']}")
 
-    # 条件3：成交量超过30日均量的1.8倍
     if stock["vol_ratio"] >= VOLUME_MULTIPLIER:
         triggered.append(
             f"🔥 条件3 成交量异常：今日 {stock['volume']:,}，"
@@ -372,7 +423,7 @@ def check_close_alerts(stock):
 
 
 def run_close_check(market):
-    """收盘后检测模式，market: 'a' | 'hk' | 'us'"""
+    """收盘后检测模式，汇总推送一条"""
     market_name = {"a": "A股", "hk": "港股", "us": "美股"}[market]
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] {market_name}收盘后检测...")
 
@@ -385,27 +436,34 @@ def run_close_check(market):
 
     print(f"成功获取 {len(stocks)} 支{market_name}收盘数据")
 
-    alert_count = 0
+    # 收集所有触发项
+    alert_blocks = []
     for stock in stocks:
         triggered = check_close_alerts(stock)
         if not triggered:
             continue
-        content = "\n".join([
-            f"## 📊 {stock['name']}（{stock['symbol']}）",
-            f"**市场**：{stock['market']}",
-            f"**收盘价**：{stock['price']}",
-            f"**近30天区间**：{stock['min_30d']} ～ {stock['max_30d']}",
-            f"**今日成交量**：{stock['volume']:,}"
-            f"（30日均量：{stock['avg_vol_30']:,} | {stock['vol_ratio']:.1f}倍）",
-            f"**推送时间**：{datetime.now().strftime('%Y-%m-%d %H:%M')}",
-            "",
-            "### 触发原因",
+        block = "\n".join([
+            f"### 📊 {stock['name']}（{stock['symbol']}）",
+            f"市场：{stock['market']} | 收盘价：**{stock['price']}**",
+            f"近30天：{stock['min_30d']} ～ {stock['max_30d']} | "
+            f"量比：{stock['vol_ratio']:.1f}x",
         ] + triggered)
-        send_to_wechat(f"📊 {stock['name']}（{stock['symbol']}）收盘异动", content)
-        alert_count += 1
-        time.sleep(1)
+        alert_blocks.append(block)
 
-    print(f"共推送 {alert_count} 条收盘异动" if alert_count else f"{market_name}无收盘异动触发")
+    if not alert_blocks:
+        print(f"{market_name}无收盘异动触发")
+        return
+
+    now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+    content = "\n\n---\n\n".join([
+        f"## {market_name}收盘异动汇总（{now_str}）\n共 **{len(alert_blocks)}** 支触发",
+    ] + alert_blocks)
+
+    send_to_wechat(
+        f"📊 {market_name}收盘异动 {len(alert_blocks)} 支（{now_str}）",
+        content
+    )
+    print(f"共 {len(alert_blocks)} 条异动，已汇总推送")
 
 
 # ============================================================
