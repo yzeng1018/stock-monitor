@@ -111,84 +111,56 @@ def get_intraday_us(symbols):
 
 
 def get_intraday_hk():
-    """并发拉取港股实时价（逐支，避免批量接口慢速分页）"""
-    def _fetch(symbol):
-        try:
-            fi = yf.Ticker(symbol).fast_info
-            current    = fi.last_price
-            prev_close = fi.previous_close
-            if not current or not prev_close or prev_close == 0:
-                return None
-            # 从 akshare 格式映射名称（仅在有数据时）
-            change_pct = (current - prev_close) / prev_close * 100
-            return {
-                "symbol":     symbol,
-                "name":       symbol.replace(".HK", ""),
-                "price":      round(float(current), 3),
-                "prev_close": round(float(prev_close), 3),
-                "change_pct": round(float(change_pct), 2),
-                "market":     "港股",
-            }
-        except Exception as e:
-            print(f"  ⚠️  {symbol} 港股实时数据获取失败: {e}")
-            return None
-
+    """用 akshare 批量拉取港股实时价（yfinance 在 GitHub Actions 上无法访问 HK 数据）"""
     results = []
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        futures = {executor.submit(_fetch, s): s for s in HK_STOCKS}
-        for future in as_completed(futures):
-            r = future.result()
-            if r:
-                results.append(r)
-    return results
-
-
-def get_intraday_a():
-    """并发拉取A股实时价（逐支，避免批量接口慢速分页）"""
-    def _fetch(code):
-        try:
-            # akshare 单支实时行情：返回 DataFrame，取最新一行
-            df = ak.stock_zh_a_spot_em()
-            row = df[df["代码"] == code]
-            if row.empty:
-                return None
-            row = row.iloc[0]
-            prev_close = float(row["昨收"])
-            current    = float(row["最新价"])
-            if prev_close == 0:
-                return None
-            return {
-                "symbol":     code,
-                "name":       row["名称"],
-                "price":      round(current, 3),
-                "prev_close": round(prev_close, 3),
-                "change_pct": round(float(row["涨跌幅"]), 2),
-                "market":     "A股",
-            }
-        except Exception as e:
-            print(f"  ⚠️  A股 {code} 实时数据获取失败: {e}")
-            return None
-
-    # A股数量少(15支)，先批量拉一次再过滤（akshare无单支实时接口）
-    results = []
+    hk_codes = [s.replace(".HK", "") for s in HK_STOCKS]
     try:
-        spot_df = ak.stock_zh_a_spot_em()
-        spot_df = spot_df[spot_df["代码"].isin(A_STOCKS)].copy()
+        spot_df = ak.stock_hk_spot_em()
+        spot_df = spot_df[spot_df["代码"].isin(hk_codes)].copy()
         for _, row in spot_df.iterrows():
             prev_close = float(row["昨收"])
             current    = float(row["最新价"])
             if prev_close == 0:
                 continue
+            change_pct = (current - prev_close) / prev_close * 100
             results.append({
-                "symbol":     row["代码"],
+                "symbol":     row["代码"] + ".HK",
                 "name":       row["名称"],
                 "price":      round(current, 3),
                 "prev_close": round(prev_close, 3),
-                "change_pct": round(float(row["涨跌幅"]), 2),
-                "market":     "A股",
+                "change_pct": round(change_pct, 2),
+                "market":     "港股",
             })
     except Exception as e:
-        print(f"A股实时行情获取失败: {e}")
+        print(f"港股实时行情获取失败: {e}")
+    return results
+
+
+def get_intraday_a():
+    """用 akshare 批量拉取A股实时价，失败自动重试3次"""
+    results = []
+    for attempt in range(3):
+        try:
+            spot_df = ak.stock_zh_a_spot_em()
+            spot_df = spot_df[spot_df["代码"].isin(A_STOCKS)].copy()
+            for _, row in spot_df.iterrows():
+                prev_close = float(row["昨收"])
+                current    = float(row["最新价"])
+                if prev_close == 0:
+                    continue
+                results.append({
+                    "symbol":     row["代码"],
+                    "name":       row["名称"],
+                    "price":      round(current, 3),
+                    "prev_close": round(prev_close, 3),
+                    "change_pct": round(float(row["涨跌幅"]), 2),
+                    "market":     "A股",
+                })
+            return results
+        except Exception as e:
+            print(f"A股实时行情获取失败（第{attempt+1}次）: {e}")
+            if attempt < 2:
+                time.sleep(5)
     return results
 
 
