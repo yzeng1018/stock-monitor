@@ -77,13 +77,13 @@ def send_to_wechat(title, content):
 # 模式一：盘中实时监控（条件1）
 # ============================================================
 
-def get_intraday_us_hk(symbols):
-    """用 fast_info 拉取美股/港股实时价 vs 昨日收盘"""
+def get_intraday_us(symbols):
+    """用 fast_info 拉取美股实时价 vs 昨日收盘"""
     results = []
     for symbol in symbols:
         try:
             fi = yf.Ticker(symbol).fast_info
-            current   = fi.last_price
+            current    = fi.last_price
             prev_close = fi.previous_close
             if not current or not prev_close or prev_close == 0:
                 continue
@@ -94,11 +94,38 @@ def get_intraday_us_hk(symbols):
                 "price":      round(float(current), 3),
                 "prev_close": round(float(prev_close), 3),
                 "change_pct": round(float(change_pct), 2),
-                "market":     "港股" if symbol.endswith(".HK") else "美股",
+                "market":     "美股",
             })
             time.sleep(0.2)
         except Exception as e:
             print(f"  ⚠️  {symbol} 实时数据获取失败: {e}")
+    return results
+
+
+def get_intraday_hk():
+    """用 akshare 拉取港股实时价 vs 昨日收盘（更稳定）"""
+    results = []
+    # 把 "02513.HK" 转成 akshare 用的 "02513"
+    hk_codes = [s.replace(".HK", "") for s in HK_STOCKS]
+    try:
+        spot_df = ak.stock_hk_spot_em()
+        spot_df = spot_df[spot_df["代码"].isin(hk_codes)].copy()
+        for _, row in spot_df.iterrows():
+            prev_close = float(row["昨收"])
+            current    = float(row["最新价"])
+            if prev_close == 0:
+                continue
+            change_pct = (current - prev_close) / prev_close * 100
+            results.append({
+                "symbol":     row["代码"] + ".HK",
+                "name":       row["名称"],
+                "price":      round(current, 3),
+                "prev_close": round(prev_close, 3),
+                "change_pct": round(change_pct, 2),
+                "market":     "港股",
+            })
+    except Exception as e:
+        print(f"港股实时行情获取失败: {e}")
     return results
 
 
@@ -127,8 +154,10 @@ def run_intraday():
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] 盘中实时监控...")
 
     all_stocks = []
-    print("获取美股 + 港股实时数据...")
-    all_stocks.extend(get_intraday_us_hk(US_STOCKS + HK_STOCKS))
+    print("获取美股实时数据...")
+    all_stocks.extend(get_intraday_us(US_STOCKS))
+    print("获取港股实时数据...")
+    all_stocks.extend(get_intraday_hk())
     print("获取A股实时数据...")
     all_stocks.extend(get_intraday_a())
     print(f"成功获取 {len(all_stocks)} 支股票实时数据")
