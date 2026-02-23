@@ -7,6 +7,9 @@
   close_a   - A股收盘后30分钟：条件2（30天新高/低）+ 条件3（成交量异常）
   close_hk  - 港股收盘后30分钟：条件2 + 条件3
   close_us  - 美股收盘后30分钟：条件2 + 条件3
+  daily_a   - A股日报（收盘后1小时）：股价/涨跌/成交量/7日均量 + ChatGPT新闻摘要
+  daily_hk  - 港股日报（收盘后1小时）：同上
+  daily_us  - 美股日报（收盘后1小时）：同上
 """
 
 import os
@@ -14,6 +17,7 @@ import sys
 import requests
 import yfinance as yf
 import akshare as ak
+import openai
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 import time
@@ -23,6 +27,7 @@ import time
 # ============================================================
 
 PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "")
+DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY", "")
 
 PRICE_CHANGE_THRESHOLD = 4.0  # 盘中涨跌幅阈值（%）
 VOLUME_MULTIPLIER      = 1.8  # 收盘后成交量倍数阈值
@@ -439,6 +444,260 @@ def run_close_check(market):
 
 
 # ============================================================
+# 模式四/五/六：日报（股价 + 成交量 + ChatGPT新闻摘要）
+# ============================================================
+
+def get_news_summary(symbol, name, market):
+    """获取股票新闻并用 ChatGPT 总结（最多5条新闻标题）"""
+    news_texts = []
+
+    try:
+        if market in ["美股", "港股"]:
+            ticker = yf.Ticker(symbol)
+            for n in ticker.news[:5]:
+                if "content" in n and "title" in n["content"]:
+                    title   = n["content"]["title"]
+                    summary = n["content"].get("summary", "")
+                    news_texts.append(f"- {title}: {summary}" if summary else f"- {title}")
+        elif market == "A股":
+            news_df = ak.stock_news_em(symbol=symbol)
+            if news_df is not None and not news_df.empty:
+                for _, row in news_df.head(5).iterrows():
+                    news_texts.append(f"- {row.get('新闻标题', '')}")
+    except Exception as e:
+        print(f"  ⚠️  {symbol} 新闻获取失败: {e}")
+
+    if not news_texts:
+        return "暂无今日新闻"
+
+    if not DASHSCOPE_API_KEY:
+        return "（未配置 DASHSCOPE_API_KEY）\n" + "\n".join(news_texts[:3])
+
+    try:
+        client = openai.OpenAI(
+            api_key=DASHSCOPE_API_KEY,
+            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        )
+        prompt = (
+            f"以下是{name}（{symbol}）的最新相关新闻：\n"
+            + "\n".join(news_texts)
+            + "\n\n请用2-3句话简洁总结该股票今日的重点新闻和市场关注点。用中文回答，不超过100字。"
+        )
+        resp = client.chat.completions.create(
+            model="qwen-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=200,
+            temperature=0.3,
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"  ⚠️  {symbol} Qwen摘要失败: {e}")
+        return "新闻摘要获取失败"
+
+
+def get_daily_data_us():
+    """并发获取美股日报数据：收盘价、涨跌幅、成交量、7日均量"""
+    def _fetch(symbol):
+        try:
+            hist = yf.Ticker(symbol).history(period="15d")
+            if hist.empty or len(hist) < 5:
+                return None
+            current_price = hist["Close"].iloc[-1]
+            prev_close    = hist["Close"].iloc[-2]
+            current_vol   = hist["Volume"].iloc[-1]
+            avg_vol_7     = hist["Volume"].iloc[-8:-1].mean()
+            change_pct    = (current_price - prev_close) / prev_close * 100
+            vol_ratio     = current_vol / avg_vol_7 if avg_vol_7 > 0 else 0
+            return {
+                "symbol":    symbol,
+                "name":      symbol,
+                "price":     round(float(current_price), 3),
+                "change_pct": round(float(change_pct), 2),
+                "volume":    int(current_vol),
+                "avg_vol_7": int(avg_vol_7),
+                "vol_ratio": round(float(vol_ratio), 2),
+                "market":    "美股",
+            }
+        except Exception as e:
+            print(f"  ⚠️  {symbol} 日报数据失败: {e}")
+            return None
+
+    results = []
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {executor.submit(_fetch, s): s for s in US_STOCKS}
+        for future in as_completed(futures):
+            r = future.result()
+            if r:
+                results.append(r)
+    return results
+
+
+def get_daily_data_hk():
+    """获取港股日报数据：实时快照 + 7日均量（akshare）"""
+    hk_codes   = [s.replace(".HK", "") for s in HK_STOCKS]
+    end_date   = datetime.now().strftime("%Y%m%d")
+    start_date = (datetime.now() - timedelta(days=20)).strftime("%Y%m%d")
+
+    spot_map = {}
+    try:
+        spot_df = ak.stock_hk_spot_em()
+        spot_df = spot_df[spot_df["代码"].isin(hk_codes)].copy()
+        for _, row in spot_df.iterrows():
+            prev_close = float(row["昨收"])
+            current    = float(row["最新价"])
+            change_pct = (current - prev_close) / prev_close * 100 if prev_close > 0 else 0
+            spot_map[row["代码"]] = {
+                "name":       row["名称"],
+                "price":      current,
+                "change_pct": round(change_pct, 2),
+                "volume":     float(row["成交量"]),
+            }
+    except Exception as e:
+        print(f"港股实时行情获取失败: {e}")
+        return []
+
+    def _fetch_hist(code):
+        try:
+            hist = ak.stock_hk_hist(
+                symbol=code, period="daily",
+                start_date=start_date, end_date=end_date, adjust="qfq"
+            )
+            if hist is None or len(hist) < 5:
+                return None
+            hist      = hist.sort_values("日期").reset_index(drop=True)
+            avg_vol_7 = hist["成交量"].iloc[-8:-1].mean()
+            info      = spot_map.get(code, {})
+            current_vol = info.get("volume", 0)
+            vol_ratio   = current_vol / avg_vol_7 if avg_vol_7 > 0 else 0
+            return {
+                "symbol":    code + ".HK",
+                "name":      info.get("name", code),
+                "price":     round(info.get("price", 0), 3),
+                "change_pct": info.get("change_pct", 0),
+                "volume":    int(current_vol),
+                "avg_vol_7": int(avg_vol_7),
+                "vol_ratio": round(float(vol_ratio), 2),
+                "market":    "港股",
+            }
+        except Exception as e:
+            print(f"  ⚠️  港股 {code} 历史数据失败: {e}")
+            return None
+
+    results = []
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(_fetch_hist, code): code for code in hk_codes if code in spot_map}
+        for future in as_completed(futures):
+            r = future.result()
+            if r:
+                results.append(r)
+    return results
+
+
+def get_daily_data_a():
+    """获取A股日报数据：实时快照 + 7日均量（akshare）"""
+    end_date   = datetime.now().strftime("%Y%m%d")
+    start_date = (datetime.now() - timedelta(days=20)).strftime("%Y%m%d")
+
+    spot_map = {}
+    for attempt in range(3):
+        try:
+            spot_df = ak.stock_zh_a_spot_em()
+            spot_df = spot_df[spot_df["代码"].isin(A_STOCKS)].copy()
+            for _, row in spot_df.iterrows():
+                spot_map[row["代码"]] = {
+                    "name":       row["名称"],
+                    "price":      float(row["最新价"]),
+                    "change_pct": round(float(row["涨跌幅"]), 2),
+                    "volume":     float(row["成交量"]),
+                }
+            break
+        except Exception as e:
+            print(f"A股实时行情获取失败（第{attempt+1}次）: {e}")
+            if attempt < 2:
+                time.sleep(5)
+
+    def _fetch_hist(code):
+        try:
+            hist = ak.stock_zh_a_hist(
+                symbol=code, period="daily",
+                start_date=start_date, end_date=end_date, adjust="qfq"
+            )
+            if hist is None or len(hist) < 5:
+                return None
+            hist      = hist.sort_values("日期").reset_index(drop=True)
+            avg_vol_7 = hist["成交量"].iloc[-8:-1].mean()
+            info      = spot_map.get(code, {})
+            current_vol = info.get("volume", 0)
+            vol_ratio   = current_vol / avg_vol_7 if avg_vol_7 > 0 else 0
+            return {
+                "symbol":    code,
+                "name":      info.get("name", code),
+                "price":     round(info.get("price", 0), 3),
+                "change_pct": info.get("change_pct", 0),
+                "volume":    int(current_vol),
+                "avg_vol_7": int(avg_vol_7),
+                "vol_ratio": round(float(vol_ratio), 2),
+                "market":    "A股",
+            }
+        except Exception as e:
+            print(f"  ⚠️  A股 {code} 历史数据失败: {e}")
+            return None
+
+    results = []
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(_fetch_hist, code): code for code in spot_map}
+        for future in as_completed(futures):
+            r = future.result()
+            if r:
+                results.append(r)
+    return results
+
+
+def run_daily_report(market):
+    """日报模式：每支股票展示股价/涨跌/成交量/7日均量 + ChatGPT新闻摘要，汇总推送一条"""
+    market_name = {"a": "A股", "hk": "港股", "us": "美股"}[market]
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] 生成{market_name}日报...")
+
+    if market == "a":
+        stocks = get_daily_data_a()
+    elif market == "hk":
+        stocks = get_daily_data_hk()
+    else:
+        stocks = get_daily_data_us()
+
+    if not stocks:
+        print(f"{market_name}无数据，跳过日报")
+        return
+
+    stocks = sorted(stocks, key=lambda x: -x["change_pct"])
+
+    blocks = []
+    for stock in stocks:
+        print(f"  获取 {stock['symbol']} 新闻摘要...")
+        summary = get_news_summary(stock["symbol"], stock["name"], stock["market"])
+        emoji   = "📈" if stock["change_pct"] >= 0 else "📉"
+        block   = "\n".join([
+            f"### {emoji} {stock['name']}（{stock['symbol']}）",
+            f"收盘价：**{stock['price']}** | 涨跌幅：**{stock['change_pct']:+.2f}%**",
+            f"今日成交量：{stock['volume']:,} | 7日均量：{stock['avg_vol_7']:,} | 量比：{stock['vol_ratio']:.2f}x",
+            f"**新闻摘要：** {summary}",
+        ])
+        blocks.append(block)
+        time.sleep(0.3)
+
+    now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+    content = "\n\n---\n\n".join([
+        f"## 📋 {market_name}日报（{now_str}）\n共 **{len(stocks)}** 支股票",
+    ] + blocks)
+
+    send_to_wechat(
+        f"📋 {market_name}日报 {datetime.now().strftime('%Y-%m-%d')}",
+        content
+    )
+    print(f"{market_name}日报已推送，共 {len(stocks)} 支股票")
+
+
+# ============================================================
 # 主入口
 # ============================================================
 
@@ -453,6 +712,12 @@ if __name__ == "__main__":
         run_close_check("hk")
     elif mode == "close_us":
         run_close_check("us")
+    elif mode == "daily_a":
+        run_daily_report("a")
+    elif mode == "daily_hk":
+        run_daily_report("hk")
+    elif mode == "daily_us":
+        run_daily_report("us")
     else:
-        print(f"未知模式：{mode}，可选：intraday / close_a / close_hk / close_us")
+        print(f"未知模式：{mode}，可选：intraday / close_a / close_hk / close_us / daily_a / daily_hk / daily_us")
         sys.exit(1)
