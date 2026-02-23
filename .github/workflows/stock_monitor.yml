@@ -1,44 +1,78 @@
-name: 股票异动监控
+name: 股票异动监控 v2
 
 on:
   schedule:
-    # 美股交易时间（UTC）：14:30-21:00，每15分钟检查一次
-    - cron: "*/15 14-21 * * 1-5"
-    # A股/港股交易时间（UTC）：01:30-07:00，每15分钟检查一次
-    - cron: "*/15 1-7 * * 1-5"
-    # 每天收盘后发送日报（美股收盘 21:30 UTC）
+    # 条件1 盘中实时监控 —— A股/港股交易时段（UTC 01:30-06:55），每5分钟
+    - cron: "*/5 1-6 * * 1-5"
+    # 条件1 盘中实时监控 —— 美股交易时段（UTC 14:30-20:55），每5分钟
+    - cron: "*/5 14-20 * * 1-5"
+    # 条件2+3 —— A股收盘后30分钟（15:30 CST = 07:30 UTC）
+    - cron: "30 7 * * 1-5"
+    # 条件2+3 —— 港股收盘后30分钟（16:30 HKT = 08:30 UTC）
+    - cron: "30 8 * * 1-5"
+    # 条件2+3 —— 美股收盘后30分钟（16:30 EST = 21:30 UTC）
     - cron: "30 21 * * 1-5"
-  workflow_dispatch:  # 允许手动触发
+
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "运行模式"
+        required: true
+        default: "intraday"
+        type: choice
+        options:
+          - intraday
+          - close_a
+          - close_hk
+          - close_us
 
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
-      
+
       - name: 设置 Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      
+
       - name: 安装依赖
         run: pip install -r requirements.txt
-      
+
       - name: 判断运行模式并执行
         env:
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+          MANUAL_MODE: ${{ github.event.inputs.mode }}
         run: |
-          # 获取当前 UTC 分钟
-          MINUTE=$(date -u +"%M")
+          # 手动触发时，使用用户指定的模式
+          if [ -n "$MANUAL_MODE" ]; then
+            echo "手动触发，模式：$MANUAL_MODE"
+            python stock_monitor.py $MANUAL_MODE
+            exit 0
+          fi
+
+          # 定时触发：根据当前 UTC 时间决定模式
           HOUR=$(date -u +"%H")
-          
-          # 21:30 UTC 发送日报，其他时间检测异动
-          if [ "$HOUR" = "21" ] && [ "$MINUTE" = "30" ]; then
-            echo "发送每日汇总..."
-            python stock_monitor.py summary
+          MINUTE=$(date -u +"%M")
+
+          echo "当前 UTC 时间：${HOUR}:${MINUTE}"
+
+          if [ "$HOUR" = "07" ] && [ "$MINUTE" = "30" ]; then
+            echo "→ A股收盘后检测"
+            python stock_monitor.py close_a
+
+          elif [ "$HOUR" = "08" ] && [ "$MINUTE" = "30" ]; then
+            echo "→ 港股收盘后检测"
+            python stock_monitor.py close_hk
+
+          elif [ "$HOUR" = "21" ] && [ "$MINUTE" = "30" ]; then
+            echo "→ 美股收盘后检测"
+            python stock_monitor.py close_us
+
           else
-            echo "检测异动..."
-            python stock_monitor.py alert
+            echo "→ 盘中实时监控"
+            python stock_monitor.py intraday
           fi
