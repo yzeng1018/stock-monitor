@@ -38,7 +38,7 @@ SMTP_PORT     = 587
 SMTP_USER     = os.environ.get("SMTP_USER", "")
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 
-PRICE_CHANGE_THRESHOLD = 4.0  # 盘中涨跌幅阈值（%）
+PRICE_CHANGE_THRESHOLD = 5.0  # 盘中涨跌幅阈值（%）
 VOLUME_MULTIPLIER      = 1.8  # 收盘后成交量倍数阈值
 
 US_STOCKS = [
