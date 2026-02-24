@@ -598,32 +598,24 @@ def get_daily_data_us(symbols=None):
 
 
 def get_daily_data_hk(stock_list=None):
-    """获取港股日报数据：实时快照 + 7日均量（akshare）"""
+    """获取港股日报数据：从历史K线取收盘价/涨跌幅/成交量，不依赖实时行情"""
     if stock_list is None:
         stock_list = HK_STOCKS
     hk_codes   = [s.replace(".HK", "") for s in stock_list]
     end_date   = datetime.now().strftime("%Y%m%d")
     start_date = (datetime.now() - timedelta(days=20)).strftime("%Y%m%d")
 
-    spot_map = {}
+    # 仅用于获取股票名称，失败不影响主流程
+    name_map = {}
     try:
         spot_df = ak.stock_hk_spot_em()
         spot_df = spot_df[spot_df["代码"].isin(hk_codes)].copy()
         for _, row in spot_df.iterrows():
-            prev_close = float(row["昨收"])
-            current    = float(row["最新价"])
-            change_pct = (current - prev_close) / prev_close * 100 if prev_close > 0 else 0
-            spot_map[row["代码"]] = {
-                "name":       row["名称"],
-                "price":      current,
-                "change_pct": round(change_pct, 2),
-                "volume":     float(row["成交量"]),
-            }
-    except Exception as e:
-        print(f"港股实时行情获取失败: {e}")
-        return []
+            name_map[row["代码"]] = row["名称"]
+    except Exception:
+        pass
 
-    def _fetch_hist(code):
+    def _fetch(code):
         try:
             hist = ak.stock_hk_hist(
                 symbol=code, period="daily",
@@ -632,19 +624,19 @@ def get_daily_data_hk(stock_list=None):
             if hist is None or len(hist) < 5:
                 return None
             hist      = hist.sort_values("日期").reset_index(drop=True)
+            last      = hist.iloc[-1]
             avg_vol_7 = hist["成交量"].iloc[-8:-1].mean()
-            info      = spot_map.get(code, {})
-            current_vol = info.get("volume", 0)
-            vol_ratio   = current_vol / avg_vol_7 if avg_vol_7 > 0 else 0
+            vol       = float(last["成交量"])
+            vol_ratio = vol / avg_vol_7 if avg_vol_7 > 0 else 0
             return {
-                "symbol":    code + ".HK",
-                "name":      info.get("name", code),
-                "price":     round(info.get("price", 0), 3),
-                "change_pct": info.get("change_pct", 0),
-                "volume":    int(current_vol),
-                "avg_vol_7": int(avg_vol_7),
-                "vol_ratio": round(float(vol_ratio), 2),
-                "market":    "港股",
+                "symbol":     code + ".HK",
+                "name":       name_map.get(code, code),
+                "price":      round(float(last["收盘"]), 3),
+                "change_pct": round(float(last["涨跌幅"]), 2),
+                "volume":     int(vol),
+                "avg_vol_7":  int(avg_vol_7),
+                "vol_ratio":  round(float(vol_ratio), 2),
+                "market":     "港股",
             }
         except Exception as e:
             print(f"  ⚠️  港股 {code} 历史数据失败: {e}")
@@ -652,7 +644,7 @@ def get_daily_data_hk(stock_list=None):
 
     results = []
     with ThreadPoolExecutor(max_workers=5) as executor:
-        futures = {executor.submit(_fetch_hist, code): code for code in hk_codes if code in spot_map}
+        futures = {executor.submit(_fetch, code): code for code in hk_codes}
         for future in as_completed(futures):
             r = future.result()
             if r:
@@ -661,31 +653,23 @@ def get_daily_data_hk(stock_list=None):
 
 
 def get_daily_data_a(stock_list=None):
-    """获取A股日报数据：实时快照 + 7日均量（akshare）"""
+    """获取A股日报数据：从历史K线取收盘价/涨跌幅/成交量，不依赖实时行情"""
     if stock_list is None:
         stock_list = A_STOCKS
     end_date   = datetime.now().strftime("%Y%m%d")
     start_date = (datetime.now() - timedelta(days=20)).strftime("%Y%m%d")
 
-    spot_map = {}
-    for attempt in range(3):
-        try:
-            spot_df = ak.stock_zh_a_spot_em()
-            spot_df = spot_df[spot_df["代码"].isin(stock_list)].copy()
-            for _, row in spot_df.iterrows():
-                spot_map[row["代码"]] = {
-                    "name":       row["名称"],
-                    "price":      float(row["最新价"]),
-                    "change_pct": round(float(row["涨跌幅"]), 2),
-                    "volume":     float(row["成交量"]),
-                }
-            break
-        except Exception as e:
-            print(f"A股实时行情获取失败（第{attempt+1}次）: {e}")
-            if attempt < 2:
-                time.sleep(5)
+    # 仅用于获取股票名称，失败不影响主流程
+    name_map = {}
+    try:
+        spot_df = ak.stock_zh_a_spot_em()
+        spot_df = spot_df[spot_df["代码"].isin(stock_list)].copy()
+        for _, row in spot_df.iterrows():
+            name_map[row["代码"]] = row["名称"]
+    except Exception:
+        pass
 
-    def _fetch_hist(code):
+    def _fetch(code):
         try:
             hist = ak.stock_zh_a_hist(
                 symbol=code, period="daily",
@@ -694,19 +678,19 @@ def get_daily_data_a(stock_list=None):
             if hist is None or len(hist) < 5:
                 return None
             hist      = hist.sort_values("日期").reset_index(drop=True)
+            last      = hist.iloc[-1]
             avg_vol_7 = hist["成交量"].iloc[-8:-1].mean()
-            info      = spot_map.get(code, {})
-            current_vol = info.get("volume", 0)
-            vol_ratio   = current_vol / avg_vol_7 if avg_vol_7 > 0 else 0
+            vol       = float(last["成交量"])
+            vol_ratio = vol / avg_vol_7 if avg_vol_7 > 0 else 0
             return {
-                "symbol":    code,
-                "name":      info.get("name", code),
-                "price":     round(info.get("price", 0), 3),
-                "change_pct": info.get("change_pct", 0),
-                "volume":    int(current_vol),
-                "avg_vol_7": int(avg_vol_7),
-                "vol_ratio": round(float(vol_ratio), 2),
-                "market":    "A股",
+                "symbol":     code,
+                "name":       name_map.get(code, code),
+                "price":      round(float(last["收盘"]), 3),
+                "change_pct": round(float(last["涨跌幅"]), 2),
+                "volume":     int(vol),
+                "avg_vol_7":  int(avg_vol_7),
+                "vol_ratio":  round(float(vol_ratio), 2),
+                "market":     "A股",
             }
         except Exception as e:
             print(f"  ⚠️  A股 {code} 历史数据失败: {e}")
@@ -714,7 +698,7 @@ def get_daily_data_a(stock_list=None):
 
     results = []
     with ThreadPoolExecutor(max_workers=5) as executor:
-        futures = {executor.submit(_fetch_hist, code): code for code in spot_map}
+        futures = {executor.submit(_fetch, code): code for code in stock_list}
         for future in as_completed(futures):
             r = future.result()
             if r:
