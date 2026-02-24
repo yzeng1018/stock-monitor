@@ -75,32 +75,40 @@ jobs:
           fi
 
           # 定时触发：根据当前 UTC 时间决定模式
+          # 用总分钟数做区间判断，避免 GitHub Actions cron 延迟导致精确匹配失败
           HOUR=$(date -u +"%H")
           MINUTE=$(date -u +"%M")
+          MIN_TOTAL=$((10#$HOUR * 60 + 10#$MINUTE))
 
-          echo "当前 UTC 时间：${HOUR}:${MINUTE}"
+          echo "当前 UTC 时间：${HOUR}:${MINUTE}（总分钟数：${MIN_TOTAL}）"
 
-          if [ "$HOUR" = "07" ] && [ "$MINUTE" = "30" ]; then
+          # 07:25-07:59 (445-479) → A股收盘后检测（计划 07:30）
+          if [ $MIN_TOTAL -ge 445 ] && [ $MIN_TOTAL -lt 480 ]; then
             echo "→ A股收盘后检测"
             python stock_monitor.py close_a
 
-          elif [ "$HOUR" = "08" ] && [ "$MINUTE" = "00" ]; then
+          # 08:00-08:29 (480-509) → A股日报（计划 08:00）
+          elif [ $MIN_TOTAL -ge 480 ] && [ $MIN_TOTAL -lt 510 ]; then
             echo "→ A股日报"
             python stock_monitor.py daily_a
 
-          elif [ "$HOUR" = "08" ] && [ "$MINUTE" = "30" ]; then
+          # 08:30-08:59 (510-539) → 港股收盘后检测（计划 08:30）
+          elif [ $MIN_TOTAL -ge 510 ] && [ $MIN_TOTAL -lt 540 ]; then
             echo "→ 港股收盘后检测"
             python stock_monitor.py close_hk
 
-          elif [ "$HOUR" = "09" ] && [ "$MINUTE" = "00" ]; then
+          # 09:00-09:59 (540-599) → 港股日报（计划 09:00）
+          elif [ $MIN_TOTAL -ge 540 ] && [ $MIN_TOTAL -lt 600 ]; then
             echo "→ 港股日报"
             python stock_monitor.py daily_hk
 
-          elif [ "$HOUR" = "21" ] && [ "$MINUTE" = "30" ]; then
+          # 21:25-21:59 (1285-1319) → 美股收盘后检测（计划 21:30）
+          elif [ $MIN_TOTAL -ge 1285 ] && [ $MIN_TOTAL -lt 1320 ]; then
             echo "→ 美股收盘后检测"
             python stock_monitor.py close_us
 
-          elif [ "$HOUR" = "22" ] && [ "$MINUTE" = "00" ]; then
+          # 22:00-22:59 (1320-1379) → 美股日报（计划 22:00）
+          elif [ $MIN_TOTAL -ge 1320 ] && [ $MIN_TOTAL -lt 1380 ]; then
             echo "→ 美股日报"
             python stock_monitor.py daily_us
 
