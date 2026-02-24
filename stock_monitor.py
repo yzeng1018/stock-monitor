@@ -498,27 +498,35 @@ def run_close_check(market):
 # ============================================================
 
 def get_news_summary(symbol, name, market):
-    """获取股票新闻并用 ChatGPT 总结（最多5条新闻标题）"""
+    """获取股票新闻并用 Qwen 总结（最多10条新闻，含内容摘要）"""
     news_texts = []
 
     try:
         if market in ["美股", "港股"]:
             ticker = yf.Ticker(symbol)
-            for n in ticker.news[:5]:
+            for n in ticker.news[:10]:
                 if "content" in n and "title" in n["content"]:
                     title   = n["content"]["title"]
                     summary = n["content"].get("summary", "")
-                    news_texts.append(f"- {title}: {summary}" if summary else f"- {title}")
+                    text = f"- {title}"
+                    if summary:
+                        text += f"\n  {summary[:300]}"
+                    news_texts.append(text)
         elif market == "A股":
             news_df = ak.stock_news_em(symbol=symbol)
             if news_df is not None and not news_df.empty:
-                for _, row in news_df.head(5).iterrows():
-                    news_texts.append(f"- {row.get('新闻标题', '')}")
+                for _, row in news_df.head(10).iterrows():
+                    title   = row.get('新闻标题', '')
+                    content = str(row.get('新闻内容', '') or '')
+                    text = f"- {title}"
+                    if content and content != 'nan':
+                        text += f"\n  {content[:300]}"
+                    news_texts.append(text)
     except Exception as e:
         print(f"  ⚠️  {symbol} 新闻获取失败: {e}")
 
     if not news_texts:
-        return "暂无今日新闻"
+        return "暂无近期新闻"
 
     if not DASHSCOPE_API_KEY:
         return "（未配置 DASHSCOPE_API_KEY）\n" + "\n".join(news_texts[:3])
@@ -531,12 +539,17 @@ def get_news_summary(symbol, name, market):
         prompt = (
             f"以下是{name}（{symbol}）的最新相关新闻：\n"
             + "\n".join(news_texts)
-            + "\n\n请用2-3句话简洁总结该股票今日的重点新闻和市场关注点。用中文回答，不超过100字。"
+            + "\n\n请对该股票的近期动态进行详细分析，涵盖以下几点：\n"
+            + "1. 核心新闻事件与主要催化剂\n"
+            + "2. 对公司基本面或股价的潜在影响\n"
+            + "3. 市场情绪与投资者关注焦点\n"
+            + "4. 行业或宏观层面的重要背景\n"
+            + "用中文回答，约200-300字，条理清晰，重点突出。"
         )
         resp = client.chat.completions.create(
-            model="qwen-turbo",
+            model="qwen-plus",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=200,
+            max_tokens=600,
             temperature=0.3,
         )
         return resp.choices[0].message.content.strip()

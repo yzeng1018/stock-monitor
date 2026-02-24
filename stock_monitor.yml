@@ -2,43 +2,64 @@ name: 股票异动监控
 
 on:
   schedule:
-    # 美股交易时间（UTC）：14:30-21:00，每15分钟检查一次
+    # A股/港股盘中监控 + A股收盘检测(07:30) + A股日报(08:00) + 港股收盘检测(08:30)
+    # UTC 01:00-08:45，工作日每15分钟
+    - cron: "*/15 1-8 * * 1-5"
+    # 港股日报 (UTC 09:00，工作日)
+    - cron: "0 9 * * 1-5"
+    # 美股盘中监控 + 美股收盘检测(21:30)
+    # UTC 14:00-21:45，工作日每15分钟
     - cron: "*/15 14-21 * * 1-5"
-    # A股/港股交易时间（UTC）：01:30-07:00，每15分钟检查一次
-    - cron: "*/15 1-7 * * 1-5"
-    # 每天收盘后发送日报（美股收盘 21:30 UTC）
-    - cron: "30 21 * * 1-5"
+    # 美股日报 (UTC 22:00，工作日)
+    - cron: "0 22 * * 1-5"
   workflow_dispatch:  # 允许手动触发
 
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
-      
+
       - name: 设置 Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      
+
       - name: 安装依赖
         run: pip install -r requirements.txt
-      
+
       - name: 判断运行模式并执行
         env:
-          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+          PUSHPLUS_TOKEN:    ${{ secrets.PUSHPLUS_TOKEN }}
+          SMTP_USER:         ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD:     ${{ secrets.SMTP_PASSWORD }}
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
         run: |
-          # 获取当前 UTC 分钟
           MINUTE=$(date -u +"%M")
           HOUR=$(date -u +"%H")
-          
-          # 21:30 UTC 发送日报，其他时间检测异动
-          if [ "$HOUR" = "21" ] && [ "$MINUTE" = "30" ]; then
-            echo "发送每日汇总..."
-            python stock_monitor.py summary
+          echo "当前 UTC 时间: ${HOUR}:${MINUTE}"
+
+          if [ "$HOUR" = "07" ] && [ "$MINUTE" = "30" ]; then
+            echo "运行 A股收盘检测..."
+            python stock_monitor.py close_a
+          elif [ "$HOUR" = "08" ] && [ "$MINUTE" = "00" ]; then
+            echo "运行 A股日报..."
+            python stock_monitor.py daily_a
+          elif [ "$HOUR" = "08" ] && [ "$MINUTE" = "30" ]; then
+            echo "运行 港股收盘检测..."
+            python stock_monitor.py close_hk
+          elif [ "$HOUR" = "09" ] && [ "$MINUTE" = "00" ]; then
+            echo "运行 港股日报..."
+            python stock_monitor.py daily_hk
+          elif [ "$HOUR" = "21" ] && [ "$MINUTE" = "30" ]; then
+            echo "运行 美股收盘检测..."
+            python stock_monitor.py close_us
+          elif [ "$HOUR" = "22" ] && [ "$MINUTE" = "00" ]; then
+            echo "运行 美股日报..."
+            python stock_monitor.py daily_us
           else
-            echo "检测异动..."
-            python stock_monitor.py alert
+            echo "运行盘中监控..."
+            python stock_monitor.py intraday
           fi
