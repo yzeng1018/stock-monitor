@@ -444,60 +444,38 @@ def get_close_data_us(symbols):
 
 
 def get_close_data_hk():
-    """获取港股收盘价 + 30天历史（akshare，并发拉历史）"""
-    hk_codes = [s.replace(".HK", "") for s in HK_STOCKS]
-    end_date   = datetime.now().strftime("%Y%m%d")
-    start_date = (datetime.now() - timedelta(days=45)).strftime("%Y%m%d")
-
-    # 先获取实时快照（当日收盘价/最新价）
-    spot_map = {}
-    try:
-        spot_df = ak.stock_hk_spot_em()
-        spot_df = spot_df[spot_df["代码"].isin(hk_codes)].copy()
-        for _, row in spot_df.iterrows():
-            spot_map[row["代码"]] = {
-                "name":   row["名称"],
-                "price":  float(row["最新价"]),
-                "volume": float(row["成交量"]),
-            }
-    except Exception as e:
-        print(f"港股实时行情获取失败: {e}")
-        return []
-
-    def _fetch_hist(code):
+    """获取港股收盘价 + 30天历史（yfinance）"""
+    def _fetch(sym):
+        code_4d = f"{int(sym.replace('.HK', '')):04d}.HK"
         try:
-            hist = ak.stock_hk_hist(
-                symbol=code, period="daily",
-                start_date=start_date, end_date=end_date, adjust="qfq"
-            )
-            if hist is None or len(hist) < 5:
+            hist = yf.Ticker(code_4d).history(period="35d")
+            if hist.empty or len(hist) < 5:
                 return None
-            hist = hist.sort_values("日期").reset_index(drop=True)
-            hist_30      = hist.iloc[-31:-1]
-            avg_vol_30   = hist_30["成交量"].mean()
-            max_price_30 = hist_30["收盘"].max()
-            min_price_30 = hist_30["收盘"].min()
-            info = spot_map.get(code, {})
-            current_vol = info.get("volume", 0)
-            vol_ratio   = current_vol / avg_vol_30 if avg_vol_30 > 0 else 0
+            current_price = float(hist["Close"].iloc[-1])
+            current_vol   = float(hist["Volume"].iloc[-1])
+            hist_30       = hist.iloc[-31:-1]
+            avg_vol_30    = hist_30["Volume"].mean()
+            max_price_30  = hist_30["Close"].max()
+            min_price_30  = hist_30["Close"].min()
+            vol_ratio     = current_vol / avg_vol_30 if avg_vol_30 > 0 else 0
             return {
-                "symbol":    code + ".HK",
-                "name":      info.get("name", code),
-                "price":     round(info.get("price", 0), 3),
-                "volume":    int(current_vol),
+                "symbol":     sym,
+                "name":       get_stock_name(sym, "港股"),
+                "price":      round(current_price, 3),
+                "volume":     int(current_vol),
                 "avg_vol_30": int(avg_vol_30),
-                "vol_ratio": round(float(vol_ratio), 2),
-                "max_30d":   round(float(max_price_30), 3),
-                "min_30d":   round(float(min_price_30), 3),
-                "market":    "港股",
+                "vol_ratio":  round(float(vol_ratio), 2),
+                "max_30d":    round(float(max_price_30), 3),
+                "min_30d":    round(float(min_price_30), 3),
+                "market":     "港股",
             }
         except Exception as e:
-            print(f"  ⚠️  港股 {code} 历史数据失败: {e}")
+            print(f"  ⚠️  港股 {sym} 收盘数据获取失败: {e}")
             return None
 
     results = []
     with ThreadPoolExecutor(max_workers=5) as executor:
-        futures = {executor.submit(_fetch_hist, code): code for code in hk_codes if code in spot_map}
+        futures = {executor.submit(_fetch, s): s for s in HK_STOCKS}
         for future in as_completed(futures):
             r = future.result()
             if r:
@@ -506,59 +484,38 @@ def get_close_data_hk():
 
 
 def get_close_data_a():
-    """并发获取A股收盘价 + 30天历史"""
-    end_date   = datetime.now().strftime("%Y%m%d")
-    start_date = (datetime.now() - timedelta(days=45)).strftime("%Y%m%d")
-
-    # 先获取当日实时数据（单次批量请求）
-    spot_map = {}
-    try:
-        spot_df = ak.stock_zh_a_spot_em()
-        spot_df = spot_df[spot_df["代码"].isin(A_STOCKS)].copy()
-        for _, row in spot_df.iterrows():
-            spot_map[row["代码"]] = {
-                "name":   row["名称"],
-                "price":  float(row["最新价"]),
-                "volume": float(row["成交量"]),
-            }
-    except Exception as e:
-        print(f"A股实时行情获取失败: {e}")
-        return []
-
-    def _fetch_hist(code):
+    """并发获取A股收盘价 + 30天历史（yfinance）"""
+    def _fetch(code):
+        yf_sym = f"{code}.SS" if code.startswith("6") else f"{code}.SZ"
         try:
-            hist = ak.stock_zh_a_hist(
-                symbol=code, period="daily",
-                start_date=start_date, end_date=end_date, adjust="qfq"
-            )
-            if hist is None or len(hist) < 5:
+            hist = yf.Ticker(yf_sym).history(period="35d")
+            if hist.empty or len(hist) < 5:
                 return None
-            hist = hist.sort_values("日期").reset_index(drop=True)
-            hist_30      = hist.iloc[-31:-1]
-            avg_vol_30   = hist_30["成交量"].mean()
-            max_price_30 = hist_30["收盘"].max()
-            min_price_30 = hist_30["收盘"].min()
-            info = spot_map.get(code, {})
-            current_vol = info.get("volume", 0)
-            vol_ratio   = current_vol / avg_vol_30 if avg_vol_30 > 0 else 0
+            current_price = float(hist["Close"].iloc[-1])
+            current_vol   = float(hist["Volume"].iloc[-1])
+            hist_30       = hist.iloc[-31:-1]
+            avg_vol_30    = hist_30["Volume"].mean()
+            max_price_30  = hist_30["Close"].max()
+            min_price_30  = hist_30["Close"].min()
+            vol_ratio     = current_vol / avg_vol_30 if avg_vol_30 > 0 else 0
             return {
-                "symbol":    code,
-                "name":      info.get("name", code),
-                "price":     round(info.get("price", 0), 3),
-                "volume":    int(current_vol),
+                "symbol":     code,
+                "name":       get_stock_name(code, "A股"),
+                "price":      round(current_price, 3),
+                "volume":     int(current_vol),
                 "avg_vol_30": int(avg_vol_30),
-                "vol_ratio": round(float(vol_ratio), 2),
-                "max_30d":   round(float(max_price_30), 3),
-                "min_30d":   round(float(min_price_30), 3),
-                "market":    "A股",
+                "vol_ratio":  round(float(vol_ratio), 2),
+                "max_30d":    round(float(max_price_30), 3),
+                "min_30d":    round(float(min_price_30), 3),
+                "market":     "A股",
             }
         except Exception as e:
-            print(f"  ⚠️  A股 {code} 历史数据失败: {e}")
+            print(f"  ⚠️  A股 {code} 收盘数据获取失败: {e}")
             return None
 
     results = []
     with ThreadPoolExecutor(max_workers=5) as executor:
-        futures = {executor.submit(_fetch_hist, code): code for code in spot_map}
+        futures = {executor.submit(_fetch, code): code for code in A_STOCKS}
         for future in as_completed(futures):
             r = future.result()
             if r:
