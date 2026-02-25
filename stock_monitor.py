@@ -157,12 +157,16 @@ def get_intraday_us(symbols):
             if not current or not prev_close or prev_close == 0:
                 return None
             change_pct = (current - prev_close) / prev_close * 100
+            vol     = getattr(fi, "last_volume", None)
+            avg_vol = getattr(fi, "three_month_average_volume", None)
+            vol_ratio = round(vol / avg_vol, 2) if vol and avg_vol else None
             return {
                 "symbol":     symbol,
                 "name":       symbol,
                 "price":      round(float(current), 3),
                 "prev_close": round(float(prev_close), 3),
                 "change_pct": round(float(change_pct), 2),
+                "vol_ratio":  vol_ratio,
                 "market":     "美股",
             }
         except Exception as e:
@@ -197,12 +201,16 @@ def get_intraday_hk():
             if not current or not prev_close or prev_close == 0:
                 return None
             change_pct = (current - prev_close) / prev_close * 100
+            vol     = getattr(fi, "last_volume", None)
+            avg_vol = getattr(fi, "three_month_average_volume", None)
+            vol_ratio = round(vol / avg_vol, 2) if vol and avg_vol else None
             return {
                 "symbol":     original,
                 "name":       yf_sym,
                 "price":      round(float(current), 3),
                 "prev_close": round(float(prev_close), 3),
                 "change_pct": round(float(change_pct), 2),
+                "vol_ratio":  vol_ratio,
                 "market":     "港股",
             }
         except Exception as e:
@@ -236,12 +244,16 @@ def get_intraday_a():
             if not current or not prev_close or prev_close == 0:
                 return None
             change_pct = (current - prev_close) / prev_close * 100
+            vol     = getattr(fi, "last_volume", None)
+            avg_vol = getattr(fi, "three_month_average_volume", None)
+            vol_ratio = round(vol / avg_vol, 2) if vol and avg_vol else None
             return {
                 "symbol":     original,
                 "name":       yf_sym,
                 "price":      round(float(current), 3),
                 "prev_close": round(float(prev_close), 3),
                 "change_pct": round(float(change_pct), 2),
+                "vol_ratio":  vol_ratio,
                 "market":     "A股",
             }
         except Exception as e:
@@ -375,13 +387,16 @@ def run_intraday(market=None):
         # 仅对触发异动的少量股票按需查名称，降低 API 开销
         alert_lines = []
         for stock in triggered:
-            name  = get_stock_name(stock["symbol"], stock["market"])
-            emoji = "📈" if stock["change_pct"] > 0 else "📉"
+            name      = get_stock_name(stock["symbol"], stock["market"])
+            emoji     = "📈" if stock["change_pct"] > 0 else "📉"
+            vr        = stock.get("vol_ratio")
+            vol_str   = f"{vr:.2f}x" if vr is not None else "-"
             alert_lines.append(
                 f"| {emoji} {name}（{stock['symbol']}）"
                 f" | {stock['prev_close']}"
                 f" | {stock['price']}"
-                f" | **{stock['change_pct']:+.2f}%** |"
+                f" | **{stock['change_pct']:+.2f}%**"
+                f" | {vol_str} |"
             )
 
         now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
@@ -389,8 +404,8 @@ def run_intraday(market=None):
             f"## 📊 {mkt_name}盘中异动汇总（{now_str}）",
             f"共 **{len(alert_lines)}** 支股票涨跌幅超过 ±{PRICE_CHANGE_THRESHOLD}%",
             "",
-            "| 股票 | 昨收 | 现价 | 涨跌幅 |",
-            "|------|------|------|--------|",
+            "| 股票 | 昨收 | 现价 | 涨跌幅 | 量比 |",
+            "|------|------|------|--------|------|",
         ] + alert_lines)
 
         send_to_wechat(
@@ -595,7 +610,9 @@ def get_news_summary(symbol, name, market):
 
     try:
         if market in ["美股", "港股"]:
-            ticker = yf.Ticker(symbol)
+            # 港股 symbol 需转为 yfinance 4位格式（02513.HK → 2513.HK）
+            yf_sym = f"{int(symbol.replace('.HK', '')):04d}.HK" if market == "港股" else symbol
+            ticker = yf.Ticker(yf_sym)
             for n in ticker.news[:10]:
                 if "content" in n and "title" in n["content"]:
                     title   = n["content"]["title"]
