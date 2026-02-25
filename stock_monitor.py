@@ -21,6 +21,20 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import requests
 import yfinance as yf
+
+# 在 akshare 创建 Session 之前注入浏览器 UA，避免东方财富 API 拒绝连接
+_orig_session_init = requests.Session.__init__
+def _patched_session_init(self, *args, **kwargs):
+    _orig_session_init(self, *args, **kwargs)
+    self.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        )
+    })
+requests.Session.__init__ = _patched_session_init
+
 import akshare as ak
 import openai
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -166,29 +180,35 @@ def get_intraday_us(symbols):
 
 
 def get_intraday_hk():
-    """用 akshare 批量拉取港股实时价（yfinance 在 GitHub Actions 上无法访问 HK 数据）"""
-    results = []
+    """用 akshare 批量拉取港股实时价，失败自动重试3次（指数退避）"""
     hk_codes = [s.replace(".HK", "") for s in HK_STOCKS]
-    try:
-        spot_df = ak.stock_hk_spot_em()
-        spot_df = spot_df[spot_df["代码"].isin(hk_codes)].copy()
-        for _, row in spot_df.iterrows():
-            prev_close = float(row["昨收"])
-            current    = float(row["最新价"])
-            if prev_close == 0:
-                continue
-            change_pct = (current - prev_close) / prev_close * 100
-            results.append({
-                "symbol":     row["代码"] + ".HK",
-                "name":       row["名称"],
-                "price":      round(current, 3),
-                "prev_close": round(prev_close, 3),
-                "change_pct": round(change_pct, 2),
-                "market":     "港股",
-            })
-    except Exception as e:
-        print(f"港股实时行情获取失败: {e}")
-    return results
+    for attempt in range(3):
+        try:
+            spot_df = ak.stock_hk_spot_em()
+            spot_df = spot_df[spot_df["代码"].isin(hk_codes)].copy()
+            results = []
+            for _, row in spot_df.iterrows():
+                prev_close = float(row["昨收"])
+                current    = float(row["最新价"])
+                if prev_close == 0:
+                    continue
+                change_pct = (current - prev_close) / prev_close * 100
+                results.append({
+                    "symbol":     row["代码"] + ".HK",
+                    "name":       row["名称"],
+                    "price":      round(current, 3),
+                    "prev_close": round(prev_close, 3),
+                    "change_pct": round(change_pct, 2),
+                    "market":     "港股",
+                })
+            return results
+        except Exception as e:
+            print(f"港股实时行情获取失败（第{attempt+1}次）: {e}")
+            if attempt < 2:
+                delay = 10 * (attempt + 1)  # 10s, 20s
+                print(f"  {delay}s 后重试...")
+                time.sleep(delay)
+    return []
 
 
 def get_intraday_a():
@@ -215,13 +235,31 @@ def get_intraday_a():
         except Exception as e:
             print(f"A股实时行情获取失败（第{attempt+1}次）: {e}")
             if attempt < 2:
-                time.sleep(5)
+                delay = 10 * (attempt + 1)  # 10s, 20s
+                print(f"  {delay}s 后重试...")
+                time.sleep(delay)
     return results
+
+
+def _is_us_regular_session():
+    """通过 yfinance 查询 SPY 的 marketState，确认美股是否处于正式交易时段。
+    自动处理夏令时(EDT)、冬令时(EST)和节假日，只有 REGULAR 才返回 True。
+    """
+    utc_min = datetime.utcnow().hour * 60 + datetime.utcnow().minute
+    # UTC 时间快速预判：明显不在美股窗口内（UTC 12:00-22:00）时直接返回 False，省去 API 调用
+    if not (720 <= utc_min < 1320):
+        return False
+    try:
+        state = yf.Ticker("SPY").info.get("marketState", "CLOSED")
+        return state == "REGULAR"
+    except Exception:
+        # 降级：保守时间窗口（仅覆盖 EST 冬令时 UTC 14:30-21:00）
+        return 870 <= utc_min < 1260
 
 
 def run_intraday():
     """盘中模式：实时价 vs 昨日收盘，涨跌幅 > ±5%，汇总推送一条。
-    根据当前 UTC 时间判断哪些市场正在交易，避免拉取闭市数据产生误报。
+    各市场只在其正式交易时段内拉取数据，避免闭市时产生误报。
     """
     now_utc = datetime.utcnow()
     utc_min = now_utc.hour * 60 + now_utc.minute
@@ -230,8 +268,8 @@ def run_intraday():
     a_open  = 90  <= utc_min < 420
     # 港股：09:30-16:00 HKT = UTC 01:30-08:00
     hk_open = 90  <= utc_min < 480
-    # 美股：09:30-16:00 EST/EDT → 覆盖冬令时(UTC 14:30-21:00)和夏令时(UTC 13:30-20:00)
-    us_open = 810 <= utc_min < 1260
+    # 美股：通过 yfinance 查询实际市场状态（自动处理夏/冬令时和节假日）
+    us_open = _is_us_regular_session()
 
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] 盘中实时监控 "
           f"(UTC {now_utc.strftime('%H:%M')}) "
