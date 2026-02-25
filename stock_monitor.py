@@ -185,7 +185,8 @@ def get_intraday_hk():
     代码格式：'00700.HK' → '700.HK'（去前导零）
     """
     def _to_yf(code):
-        return f"{int(code.replace('.HK', ''))}.HK"
+        # Yahoo Finance 港股代码最少 4 位，如 '00700.HK' → '0700.HK'
+        return f"{int(code.replace('.HK', '')):04d}.HK"
 
     def _fetch(original):
         yf_sym = _to_yf(original)
