@@ -274,22 +274,55 @@ def _is_us_regular_session():
         return 870 <= utc_min < 1260
 
 
+def _get_hk_name_cn(code_4digit):
+    """从新浪财经取港股中文名（如 '2513' → '智谱华章科技'）。
+    若返回内容不含中文（外资/无中文名），则返回 None，由调用方降级用英文名。
+    """
+    try:
+        url = f"https://hq.sinajs.cn/list=hk{code_4digit}"
+        resp = requests.get(
+            url,
+            headers={"Referer": "https://finance.sina.com.cn"},
+            timeout=5,
+        )
+        match = re.search(r'"([^"]+)"', resp.text)
+        if match:
+            name = match.group(1).split(",")[0].strip()
+            if name and re.search(r'[\u4e00-\u9fff]', name):
+                return name
+    except Exception:
+        pass
+    return None
+
+
 def _get_alert_name(stock):
     """为触发异动的股票查询真实名称（仅对已触发的少量股票按需调用）。
-    美股直接用 ticker；港股/A股 从 yfinance info 取 shortName。
+    港股：优先新浪财经中文名，无中文名时降级用 yfinance 英文名。
+    A股：yfinance shortName 本身即为中文。
+    美股：直接用 ticker（AAPL/TSLA 等已够直观）。
     """
     mkt, sym = stock["market"], stock["symbol"]
     if mkt == "港股":
-        yf_sym = f"{int(sym.replace('.HK', '')):04d}.HK"
+        code_4digit = f"{int(sym.replace('.HK', '')):04d}"
+        yf_sym = f"{code_4digit}.HK"
+        cn_name = _get_hk_name_cn(code_4digit)
+        if cn_name:
+            return cn_name
+        # 无中文名（外资股）→ 降级用 yfinance 英文名
+        try:
+            info = yf.Ticker(yf_sym).info
+            return info.get("shortName") or info.get("longName") or yf_sym
+        except Exception:
+            return yf_sym
     elif mkt == "A股":
         yf_sym = f"{sym}.SS" if sym.startswith("6") else f"{sym}.SZ"
+        try:
+            info = yf.Ticker(yf_sym).info
+            return info.get("shortName") or info.get("longName") or yf_sym
+        except Exception:
+            return yf_sym
     else:
-        return sym   # 美股直接用 ticker（AAPL/TSLA 等已够直观）
-    try:
-        info = yf.Ticker(yf_sym).info
-        return info.get("shortName") or info.get("longName") or yf_sym
-    except Exception:
-        return yf_sym
+        return sym   # 美股直接用 ticker
 
 
 def run_intraday(market=None):
