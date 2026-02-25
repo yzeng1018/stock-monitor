@@ -274,71 +274,100 @@ def _is_us_regular_session():
         return 870 <= utc_min < 1260
 
 
-def run_intraday():
-    """盘中模式：实时价 vs 昨日收盘，涨跌幅 > ±5%，汇总推送一条。
-    各市场只在其正式交易时段内拉取数据，避免闭市时产生误报。
+def _get_alert_name(stock):
+    """为触发异动的股票查询真实名称（仅对已触发的少量股票按需调用）。
+    美股直接用 ticker；港股/A股 从 yfinance info 取 shortName。
+    """
+    mkt, sym = stock["market"], stock["symbol"]
+    if mkt == "港股":
+        yf_sym = f"{int(sym.replace('.HK', '')):04d}.HK"
+    elif mkt == "A股":
+        yf_sym = f"{sym}.SS" if sym.startswith("6") else f"{sym}.SZ"
+    else:
+        return sym   # 美股直接用 ticker（AAPL/TSLA 等已够直观）
+    try:
+        info = yf.Ticker(yf_sym).info
+        return info.get("shortName") or info.get("longName") or yf_sym
+    except Exception:
+        return yf_sym
+
+
+def run_intraday(market=None):
+    """盘中监控。
+    market='a'|'hk'|'us'  → 仅监控指定市场
+    market=None            → 自动判断所有当前开盘市场
+    每个市场独立推送一条通知，标题注明市场名称。
     """
     now_utc = datetime.utcnow()
     utc_min = now_utc.hour * 60 + now_utc.minute
 
-    # A股：09:30-15:00 CST = UTC 01:30-07:00
-    a_open  = 90  <= utc_min < 420
-    # 港股：09:30-16:00 HKT = UTC 01:30-08:00
-    hk_open = 90  <= utc_min < 480
-    # 美股：通过 yfinance 查询实际市场状态（自动处理夏/冬令时和节假日）
-    us_open = _is_us_regular_session()
+    open_status = {
+        "a":  90  <= utc_min < 420,   # A股  UTC 01:30-07:00
+        "hk": 90  <= utc_min < 480,   # 港股 UTC 01:30-08:00
+        "us": _is_us_regular_session(),
+    }
+    name_map  = {"a": "A股", "hk": "港股", "us": "美股"}
+    fetch_map = {
+        "a":  lambda: get_intraday_a(),
+        "hk": lambda: get_intraday_hk(),
+        "us": lambda: get_intraday_us(US_STOCKS),
+    }
 
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] 盘中实时监控 "
+    targets = [market] if market else [m for m, o in open_status.items() if o]
+
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] 盘中监控 "
           f"(UTC {now_utc.strftime('%H:%M')}) "
-          f"A股:{'开' if a_open else '休'} 港股:{'开' if hk_open else '休'} 美股:{'开' if us_open else '休'}")
+          f"A股:{'开' if open_status['a'] else '休'} "
+          f"港股:{'开' if open_status['hk'] else '休'} "
+          f"美股:{'开' if open_status['us'] else '休'}")
 
-    if not any([a_open, hk_open, us_open]):
-        print("当前非任何市场交易时段，跳过监控")
+    if not targets:
+        print("当前无开盘市场，跳过监控")
         return
 
-    all_stocks = []
-    if us_open:
-        print("获取美股实时数据（并发）...")
-        all_stocks.extend(get_intraday_us(US_STOCKS))
-    if hk_open:
-        print("获取港股实时数据...")
-        all_stocks.extend(get_intraday_hk())
-    if a_open:
-        print("获取A股实时数据...")
-        all_stocks.extend(get_intraday_a())
-    print(f"成功获取 {len(all_stocks)} 支股票实时数据")
-
-    # 收集所有触发项
-    alert_lines = []
-    for stock in sorted(all_stocks, key=lambda x: -abs(x["change_pct"])):
-        if abs(stock["change_pct"]) < PRICE_CHANGE_THRESHOLD:
+    for mkt in targets:
+        mkt_name = name_map[mkt]
+        if not open_status.get(mkt, False):
+            print(f"{mkt_name}当前休市，跳过")
             continue
-        emoji = "📈" if stock["change_pct"] > 0 else "📉"
-        alert_lines.append(
-            f"| {emoji} {stock['name']}（{stock['symbol']}）"
-            f" | {stock['market']}"
-            f" | {stock['price']}"
-            f" | **{stock['change_pct']:+.2f}%** |"
+
+        print(f"获取{mkt_name}实时数据...")
+        stocks = fetch_map[mkt]()
+        print(f"成功获取 {len(stocks)} 支{mkt_name}实时数据")
+
+        triggered = sorted(
+            [s for s in stocks if abs(s["change_pct"]) >= PRICE_CHANGE_THRESHOLD],
+            key=lambda x: -abs(x["change_pct"])
         )
+        if not triggered:
+            print(f"{mkt_name}无盘中异动触发")
+            continue
 
-    if not alert_lines:
-        print("无盘中异动触发")
-        return
+        # 仅对触发异动的少量股票按需查名称，降低 API 开销
+        alert_lines = []
+        for stock in triggered:
+            name  = _get_alert_name(stock)
+            emoji = "📈" if stock["change_pct"] > 0 else "📉"
+            alert_lines.append(
+                f"| {emoji} {name}（{stock['symbol']}）"
+                f" | {stock['price']}"
+                f" | **{stock['change_pct']:+.2f}%** |"
+            )
 
-    now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
-    content = "\n".join([
-        f"## 📊 盘中异动汇总（{now_str}）",
-        f"共 **{len(alert_lines)}** 支股票涨跌幅超过 ±{PRICE_CHANGE_THRESHOLD}%",
-        "",
-        "| 股票 | 市场 | 现价 | 涨跌幅 |",
-        "|------|------|------|--------|",
-    ] + alert_lines)
+        now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+        content = "\n".join([
+            f"## 📊 {mkt_name}盘中异动汇总（{now_str}）",
+            f"共 **{len(alert_lines)}** 支股票涨跌幅超过 ±{PRICE_CHANGE_THRESHOLD}%",
+            "",
+            "| 股票 | 现价 | 涨跌幅 |",
+            "|------|------|--------|",
+        ] + alert_lines)
 
-    send_to_wechat(
-        f"📊 盘中异动 {len(alert_lines)} 支（{now_str}）",
-        content
-    )
-    print(f"共 {len(alert_lines)} 条异动，已汇总推送")
+        send_to_wechat(
+            f"📊 {mkt_name}盘中异动 {len(alert_lines)} 支（{now_str}）",
+            content
+        )
+        print(f"{mkt_name}共 {len(alert_lines)} 条异动，已汇总推送")
 
 
 # ============================================================
@@ -858,6 +887,12 @@ if __name__ == "__main__":
 
     if mode == "intraday":
         run_intraday()
+    elif mode == "intraday_a":
+        run_intraday("a")
+    elif mode == "intraday_hk":
+        run_intraday("hk")
+    elif mode == "intraday_us":
+        run_intraday("us")
     elif mode == "close_a":
         run_close_check("a")
     elif mode == "close_hk":
