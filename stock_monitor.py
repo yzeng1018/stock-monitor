@@ -220,16 +220,37 @@ def get_intraday_a():
 
 
 def run_intraday():
-    """盘中模式：实时价 vs 昨日收盘，涨跌幅 > ±4%，汇总推送一条"""
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] 盘中实时监控...")
+    """盘中模式：实时价 vs 昨日收盘，涨跌幅 > ±5%，汇总推送一条。
+    根据当前 UTC 时间判断哪些市场正在交易，避免拉取闭市数据产生误报。
+    """
+    now_utc = datetime.utcnow()
+    utc_min = now_utc.hour * 60 + now_utc.minute
+
+    # A股：09:30-15:00 CST = UTC 01:30-07:00
+    a_open  = 90  <= utc_min < 420
+    # 港股：09:30-16:00 HKT = UTC 01:30-08:00
+    hk_open = 90  <= utc_min < 480
+    # 美股：09:30-16:00 EST/EDT → 覆盖冬令时(UTC 14:30-21:00)和夏令时(UTC 13:30-20:00)
+    us_open = 810 <= utc_min < 1260
+
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] 盘中实时监控 "
+          f"(UTC {now_utc.strftime('%H:%M')}) "
+          f"A股:{'开' if a_open else '休'} 港股:{'开' if hk_open else '休'} 美股:{'开' if us_open else '休'}")
+
+    if not any([a_open, hk_open, us_open]):
+        print("当前非任何市场交易时段，跳过监控")
+        return
 
     all_stocks = []
-    print("获取美股实时数据（并发）...")
-    all_stocks.extend(get_intraday_us(US_STOCKS))
-    print("获取港股实时数据（并发）...")
-    all_stocks.extend(get_intraday_hk())
-    print("获取A股实时数据...")
-    all_stocks.extend(get_intraday_a())
+    if us_open:
+        print("获取美股实时数据（并发）...")
+        all_stocks.extend(get_intraday_us(US_STOCKS))
+    if hk_open:
+        print("获取港股实时数据...")
+        all_stocks.extend(get_intraday_hk())
+    if a_open:
+        print("获取A股实时数据...")
+        all_stocks.extend(get_intraday_a())
     print(f"成功获取 {len(all_stocks)} 支股票实时数据")
 
     # 收集所有触发项
