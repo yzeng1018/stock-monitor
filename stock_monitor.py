@@ -733,46 +733,39 @@ def get_daily_data_us(symbols=None):
 
 
 def get_daily_data_hk(stock_list=None):
-    """获取港股日报数据：从历史K线取收盘价/涨跌幅/成交量，不依赖实时行情"""
+    """获取港股日报数据：yfinance 历史K线，收盘价/涨跌幅/成交量/7日均量"""
     if stock_list is None:
         stock_list = HK_STOCKS
-    hk_codes   = [s.replace(".HK", "") for s in stock_list]
-    end_date   = datetime.now().strftime("%Y%m%d")
-    start_date = (datetime.now() - timedelta(days=20)).strftime("%Y%m%d")
 
-    # 批量预取港股中文名（优先本地 stock_names.json）
-    name_map = {code: get_stock_name(code + ".HK", "港股") for code in hk_codes}
-
-    def _fetch(code):
+    def _fetch(sym):
+        code_4d = f"{int(sym.replace('.HK', '')):04d}.HK"
         try:
-            hist = ak.stock_hk_hist(
-                symbol=code, period="daily",
-                start_date=start_date, end_date=end_date, adjust="qfq"
-            )
-            if hist is None or len(hist) < 5:
+            hist = yf.Ticker(code_4d).history(period="30d")
+            if hist.empty or len(hist) < 5:
                 return None
-            hist      = hist.sort_values("日期").reset_index(drop=True)
-            last      = hist.iloc[-1]
-            avg_vol_7 = hist["成交量"].iloc[-8:-1].mean()
-            vol       = float(last["成交量"])
-            vol_ratio = vol / avg_vol_7 if avg_vol_7 > 0 else 0
+            close     = float(hist["Close"].iloc[-1])
+            prev      = float(hist["Close"].iloc[-2])
+            change_pct = (close - prev) / prev * 100
+            vol        = float(hist["Volume"].iloc[-1])
+            avg_vol_7  = hist["Volume"].iloc[-8:-1].mean()
+            vol_ratio  = vol / avg_vol_7 if avg_vol_7 > 0 else 0
             return {
-                "symbol":     code + ".HK",
-                "name":       name_map.get(code, code),
-                "price":      round(float(last["收盘"]), 3),
-                "change_pct": round(float(last["涨跌幅"]), 2),
+                "symbol":     sym,
+                "name":       get_stock_name(sym, "港股"),
+                "price":      round(close, 3),
+                "change_pct": round(change_pct, 2),
                 "volume":     int(vol),
                 "avg_vol_7":  int(avg_vol_7),
                 "vol_ratio":  round(float(vol_ratio), 2),
                 "market":     "港股",
             }
         except Exception as e:
-            print(f"  ⚠️  港股 {code} 历史数据失败: {e}")
+            print(f"  ⚠️  港股 {sym} 历史数据失败: {e}")
             return None
 
     results = []
     with ThreadPoolExecutor(max_workers=5) as executor:
-        futures = {executor.submit(_fetch, code): code for code in hk_codes}
+        futures = {executor.submit(_fetch, s): s for s in stock_list}
         for future in as_completed(futures):
             r = future.result()
             if r:
@@ -781,33 +774,27 @@ def get_daily_data_hk(stock_list=None):
 
 
 def get_daily_data_a(stock_list=None):
-    """获取A股日报数据：从历史K线取收盘价/涨跌幅/成交量，不依赖实时行情"""
+    """获取A股日报数据：yfinance 历史K线，收盘价/涨跌幅/成交量/7日均量"""
     if stock_list is None:
         stock_list = A_STOCKS
-    end_date   = datetime.now().strftime("%Y%m%d")
-    start_date = (datetime.now() - timedelta(days=20)).strftime("%Y%m%d")
-
-    # 批量预取 A 股中文名（优先本地 stock_names.json）
-    name_map = {code: get_stock_name(code, "A股") for code in stock_list}
 
     def _fetch(code):
+        yf_sym = f"{code}.SS" if code.startswith("6") else f"{code}.SZ"
         try:
-            hist = ak.stock_zh_a_hist(
-                symbol=code, period="daily",
-                start_date=start_date, end_date=end_date, adjust="qfq"
-            )
-            if hist is None or len(hist) < 5:
+            hist = yf.Ticker(yf_sym).history(period="30d")
+            if hist.empty or len(hist) < 5:
                 return None
-            hist      = hist.sort_values("日期").reset_index(drop=True)
-            last      = hist.iloc[-1]
-            avg_vol_7 = hist["成交量"].iloc[-8:-1].mean()
-            vol       = float(last["成交量"])
-            vol_ratio = vol / avg_vol_7 if avg_vol_7 > 0 else 0
+            close      = float(hist["Close"].iloc[-1])
+            prev       = float(hist["Close"].iloc[-2])
+            change_pct = (close - prev) / prev * 100
+            vol        = float(hist["Volume"].iloc[-1])
+            avg_vol_7  = hist["Volume"].iloc[-8:-1].mean()
+            vol_ratio  = vol / avg_vol_7 if avg_vol_7 > 0 else 0
             return {
                 "symbol":     code,
-                "name":       name_map.get(code, code),
-                "price":      round(float(last["收盘"]), 3),
-                "change_pct": round(float(last["涨跌幅"]), 2),
+                "name":       get_stock_name(code, "A股"),
+                "price":      round(close, 3),
+                "change_pct": round(change_pct, 2),
                 "volume":     int(vol),
                 "avg_vol_7":  int(avg_vol_7),
                 "vol_ratio":  round(float(vol_ratio), 2),
