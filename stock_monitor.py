@@ -744,15 +744,13 @@ def get_daily_data_hk(stock_list=None):
     end_date   = datetime.now().strftime("%Y%m%d")
     start_date = (datetime.now() - timedelta(days=20)).strftime("%Y%m%d")
 
-    # 仅用于获取股票名称，失败不影响主流程
+    # 并发从新浪财经取港股中文名（替代被封锁的东方财富接口）
+    def _fetch_hk_name(code):
+        return code, _get_hk_name_cn(f"{int(code):04d}") or code
     name_map = {}
-    try:
-        spot_df = ak.stock_hk_spot_em()
-        spot_df = spot_df[spot_df["代码"].isin(hk_codes)].copy()
-        for _, row in spot_df.iterrows():
-            name_map[row["代码"]] = row["名称"]
-    except Exception:
-        pass
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        for code, name in ex.map(_fetch_hk_name, hk_codes):
+            name_map[code] = name
 
     def _fetch(code):
         try:
@@ -798,15 +796,19 @@ def get_daily_data_a(stock_list=None):
     end_date   = datetime.now().strftime("%Y%m%d")
     start_date = (datetime.now() - timedelta(days=20)).strftime("%Y%m%d")
 
-    # 仅用于获取股票名称，失败不影响主流程
+    # 并发从 yfinance 取 A 股中文名（替代被封锁的东方财富接口）
+    def _fetch_a_name(code):
+        yf_sym = f"{code}.SS" if code.startswith("6") else f"{code}.SZ"
+        try:
+            info = yf.Ticker(yf_sym).info
+            name = info.get("shortName") or info.get("longName")
+            return code, name or code
+        except Exception:
+            return code, code
     name_map = {}
-    try:
-        spot_df = ak.stock_zh_a_spot_em()
-        spot_df = spot_df[spot_df["代码"].isin(stock_list)].copy()
-        for _, row in spot_df.iterrows():
-            name_map[row["代码"]] = row["名称"]
-    except Exception:
-        pass
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        for code, name in ex.map(_fetch_a_name, stock_list):
+            name_map[code] = name
 
     def _fetch(code):
         try:
