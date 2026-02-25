@@ -274,55 +274,51 @@ def _is_us_regular_session():
         return 870 <= utc_min < 1260
 
 
-def _get_hk_name_cn(code_4digit):
-    """从新浪财经取港股中文名（如 '2513' → '智谱华章科技'）。
-    若返回内容不含中文（外资/无中文名），则返回 None，由调用方降级用英文名。
+_NAME_CACHE = None
+
+def _ensure_name_cache():
+    global _NAME_CACHE
+    if _NAME_CACHE is None:
+        try:
+            cache_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stock_names.json")
+            with open(cache_path, "r", encoding="utf-8") as f:
+                _NAME_CACHE = json.load(f)
+        except Exception:
+            _NAME_CACHE = {}
+    return _NAME_CACHE
+
+
+def get_stock_name(symbol, market):
+    """取股票中文名：① stock_names.json ② 新浪财经 API ③ 降级返回代码。
+    美股直接返回 ticker，无需中文名。
     """
+    if market == "美股":
+        return symbol
+
+    # ① 本地名称表（stock_names.json）
+    cache = _ensure_name_cache()
+    if symbol in cache:
+        return cache[symbol]
+
+    # ② 新浪财经 API（交易时段可用，休市时返回空）
     try:
-        url = f"https://hq.sinajs.cn/list=hk{code_4digit}"
-        resp = requests.get(
-            url,
-            headers={"Referer": "https://finance.sina.com.cn"},
-            timeout=5,
-        )
-        match = re.search(r'"([^"]+)"', resp.text)
-        if match:
-            name = match.group(1).split(",")[0].strip()
+        if market == "港股":
+            code_4d = f"{int(symbol.replace('.HK', '')):04d}"
+            url = f"https://hq.sinajs.cn/list=hk{code_4d}"
+        else:  # A股
+            prefix = "sh" if symbol.startswith("6") else "sz"
+            url = f"https://hq.sinajs.cn/list={prefix}{symbol}"
+        resp = requests.get(url, headers={"Referer": "https://finance.sina.com.cn"}, timeout=5)
+        m = re.search(r'"([^"]+)"', resp.text)
+        if m:
+            name = m.group(1).split(",")[0].strip()
             if name and re.search(r'[\u4e00-\u9fff]', name):
                 return name
     except Exception:
         pass
-    return None
 
-
-def _get_alert_name(stock):
-    """为触发异动的股票查询真实名称（仅对已触发的少量股票按需调用）。
-    港股：优先新浪财经中文名，无中文名时降级用 yfinance 英文名。
-    A股：yfinance shortName 本身即为中文。
-    美股：直接用 ticker（AAPL/TSLA 等已够直观）。
-    """
-    mkt, sym = stock["market"], stock["symbol"]
-    if mkt == "港股":
-        code_4digit = f"{int(sym.replace('.HK', '')):04d}"
-        yf_sym = f"{code_4digit}.HK"
-        cn_name = _get_hk_name_cn(code_4digit)
-        if cn_name:
-            return cn_name
-        # 无中文名（外资股）→ 降级用 yfinance 英文名
-        try:
-            info = yf.Ticker(yf_sym).info
-            return info.get("shortName") or info.get("longName") or yf_sym
-        except Exception:
-            return yf_sym
-    elif mkt == "A股":
-        yf_sym = f"{sym}.SS" if sym.startswith("6") else f"{sym}.SZ"
-        try:
-            info = yf.Ticker(yf_sym).info
-            return info.get("shortName") or info.get("longName") or yf_sym
-        except Exception:
-            return yf_sym
-    else:
-        return sym   # 美股直接用 ticker
+    # ③ 降级：返回代码
+    return symbol
 
 
 def run_intraday(market=None):
@@ -379,7 +375,7 @@ def run_intraday(market=None):
         # 仅对触发异动的少量股票按需查名称，降低 API 开销
         alert_lines = []
         for stock in triggered:
-            name  = _get_alert_name(stock)
+            name  = get_stock_name(stock["symbol"], stock["market"])
             emoji = "📈" if stock["change_pct"] > 0 else "📉"
             alert_lines.append(
                 f"| {emoji} {name}（{stock['symbol']}）"
@@ -744,13 +740,8 @@ def get_daily_data_hk(stock_list=None):
     end_date   = datetime.now().strftime("%Y%m%d")
     start_date = (datetime.now() - timedelta(days=20)).strftime("%Y%m%d")
 
-    # 并发从新浪财经取港股中文名（替代被封锁的东方财富接口）
-    def _fetch_hk_name(code):
-        return code, _get_hk_name_cn(f"{int(code):04d}") or code
-    name_map = {}
-    with ThreadPoolExecutor(max_workers=5) as ex:
-        for code, name in ex.map(_fetch_hk_name, hk_codes):
-            name_map[code] = name
+    # 批量预取港股中文名（优先本地 stock_names.json）
+    name_map = {code: get_stock_name(code + ".HK", "港股") for code in hk_codes}
 
     def _fetch(code):
         try:
@@ -796,19 +787,8 @@ def get_daily_data_a(stock_list=None):
     end_date   = datetime.now().strftime("%Y%m%d")
     start_date = (datetime.now() - timedelta(days=20)).strftime("%Y%m%d")
 
-    # 并发从 yfinance 取 A 股中文名（替代被封锁的东方财富接口）
-    def _fetch_a_name(code):
-        yf_sym = f"{code}.SS" if code.startswith("6") else f"{code}.SZ"
-        try:
-            info = yf.Ticker(yf_sym).info
-            name = info.get("shortName") or info.get("longName")
-            return code, name or code
-        except Exception:
-            return code, code
-    name_map = {}
-    with ThreadPoolExecutor(max_workers=5) as ex:
-        for code, name in ex.map(_fetch_a_name, stock_list):
-            name_map[code] = name
+    # 批量预取 A 股中文名（优先本地 stock_names.json）
+    name_map = {code: get_stock_name(code, "A股") for code in stock_list}
 
     def _fetch(code):
         try:
