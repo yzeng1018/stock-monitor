@@ -350,6 +350,7 @@ def run_intraday(market=None):
             emoji = "📈" if stock["change_pct"] > 0 else "📉"
             alert_lines.append(
                 f"| {emoji} {name}（{stock['symbol']}）"
+                f" | {stock['prev_close']}"
                 f" | {stock['price']}"
                 f" | **{stock['change_pct']:+.2f}%** |"
             )
@@ -359,8 +360,8 @@ def run_intraday(market=None):
             f"## 📊 {mkt_name}盘中异动汇总（{now_str}）",
             f"共 **{len(alert_lines)}** 支股票涨跌幅超过 ±{PRICE_CHANGE_THRESHOLD}%",
             "",
-            "| 股票 | 现价 | 涨跌幅 |",
-            "|------|------|--------|",
+            "| 股票 | 昨收 | 现价 | 涨跌幅 |",
+            "|------|------|------|--------|",
         ] + alert_lines)
 
         send_to_wechat(
