@@ -55,6 +55,33 @@ SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 PRICE_CHANGE_THRESHOLD = 5.0  # 盘中涨跌幅阈值（%）
 VOLUME_MULTIPLIER      = 1.8  # 收盘后成交量倍数阈值
 
+ALERTED_TODAY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "alerted_today.json")
+
+
+def load_alerted_today():
+    """读取当日已推送异动的股票代码集合，跨 Actions 运行去重用"""
+    today = datetime.now().strftime("%Y-%m-%d")
+    try:
+        with open(ALERTED_TODAY_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if data.get("date") == today:
+            return set(data.get("symbols", []))
+    except Exception:
+        pass
+    return set()
+
+
+def save_alerted_today(new_symbols):
+    """将本次新推送的股票代码追加保存到当日去重文件"""
+    today = datetime.now().strftime("%Y-%m-%d")
+    existing = load_alerted_today()
+    existing.update(new_symbols)
+    try:
+        with open(ALERTED_TODAY_FILE, "w", encoding="utf-8") as f:
+            json.dump({"date": today, "symbols": list(existing)}, f, ensure_ascii=False)
+    except Exception as e:
+        print(f"  ⚠️ 保存 alerted_today.json 失败: {e}")
+
 US_STOCKS = [
     "GOOG", "PDD", "NIO", "TSM", "AMZN", "CRCL", "SBUX", "BKNG",
     "META", "ABNB", "DUOL", "AAPL", "UBER", "FUTU", "XNET", "NVDA",
@@ -376,12 +403,15 @@ def run_intraday(market=None):
         stocks = fetch_map[mkt]()
         print(f"成功获取 {len(stocks)} 支{mkt_name}实时数据")
 
+        alerted_today = load_alerted_today()
         triggered = sorted(
-            [s for s in stocks if abs(s["change_pct"]) >= PRICE_CHANGE_THRESHOLD],
+            [s for s in stocks
+             if abs(s["change_pct"]) >= PRICE_CHANGE_THRESHOLD
+             and s["symbol"] not in alerted_today],
             key=lambda x: -abs(x["change_pct"])
         )
         if not triggered:
-            print(f"{mkt_name}无盘中异动触发")
+            print(f"{mkt_name}无盘中异动触发（或均已在今日推送过）")
             continue
 
         # 仅对触发异动的少量股票按需查名称，降低 API 开销
@@ -412,6 +442,7 @@ def run_intraday(market=None):
             f"📊 {mkt_name}盘中异动 {len(alert_lines)} 支（{now_str}）",
             content
         )
+        save_alerted_today([s["symbol"] for s in triggered])
         print(f"{mkt_name}共 {len(alert_lines)} 条异动，已汇总推送")
 
 
