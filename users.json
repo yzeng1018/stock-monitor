@@ -5,12 +5,5 @@
     "us_stocks": ["GOOG", "AMZN", "META", "AAPL", "NVDA", "TSLA", "NIO", "SBUX", "DUOL", "FUTU", "EDU", "SE", "LI", "BIDU", "TCOM", "BILI", "RBLX", "HOOD", "ZH", "LU", "LYFT"],
     "hk_stocks": ["00700.HK", "09988.HK", "09618.HK", "03690.HK", "01211.HK", "09868.HK", "01024.HK", "09992.HK", "02333.HK", "02559.HK", "06030.HK", "00981.HK"],
     "a_stocks": ["600519", "300750", "688981", "600030", "002230", "601318", "688207", "300418"]
-  },
-  {
-    "name": "Samuel",
-    "email": "samuel295@163.com",
-    "us_stocks": ["GOOG", "PDD", "NIO", "TSM", "AMZN", "CRCL", "SBUX", "BKNG", "META", "ABNB", "DUOL", "AAPL", "UBER", "FUTU", "XNET", "NVDA", "DIDIY", "FIG", "BEKE", "EDU", "HOOD", "LKNCY", "TAL", "SE", "DASH", "TSLA", "MELI", "LI", "GOTU", "ZH", "XPEV", "BIDU", "SY", "TCOM", "PONY", "BILI", "WRD", "RBLX", "LU", "LYFT"],
-    "hk_stocks": ["02513.HK", "00100.HK", "02252.HK", "08083.HK", "02559.HK", "02550.HK", "06030.HK", "00853.HK", "02333.HK", "02013.HK", "03750.HK", "03690.HK", "01797.HK", "09618.HK", "00700.HK", "01211.HK", "09868.HK", "09992.HK", "01024.HK", "01810.HK", "00981.HK", "02643.HK", "09988.HK", "09626.HK"],
-    "a_stocks": ["688207", "688256", "688981", "600519", "688277", "603019", "000034", "600030", "002594", "300896", "002230", "601318", "300750", "000737", "300418"]
   }
 ]
