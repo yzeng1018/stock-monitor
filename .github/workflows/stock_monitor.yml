@@ -84,6 +84,7 @@ jobs:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           MANUAL_MODE: ${{ github.event.inputs.mode }}
+          TRIGGER_SCHEDULE: ${{ github.event.schedule }}
         run: |
           # 手动触发时，使用用户指定的模式
           if [ -n "$MANUAL_MODE" ]; then
@@ -92,59 +93,47 @@ jobs:
             exit 0
           fi
 
-          # 定时触发：根据当前 UTC 时间决定模式
-          # 用总分钟数做区间判断，避免 GitHub Actions cron 延迟导致精确匹配失败
-          HOUR=$(date -u +"%H")
-          MINUTE=$(date -u +"%M")
-          MIN_TOTAL=$((10#$HOUR * 60 + 10#$MINUTE))
-
-          echo "当前 UTC 时间：${HOUR}:${MINUTE}（总分钟数：${MIN_TOTAL}）"
-
-          # 07:25-07:59 (445-479) → A股收盘后检测（计划 07:30）
-          if [ $MIN_TOTAL -ge 445 ] && [ $MIN_TOTAL -lt 480 ]; then
-            echo "→ A股收盘后检测"
-            python stock_monitor.py close_a
-
-          # 08:00-08:29 (480-509) → A股日报（计划 08:00）
-          elif [ $MIN_TOTAL -ge 480 ] && [ $MIN_TOTAL -lt 510 ]; then
-            echo "→ A股日报"
-            python stock_monitor.py daily_a
-
-          # 08:30-08:59 (510-539) → 港股收盘后检测（计划 08:30）
-          elif [ $MIN_TOTAL -ge 510 ] && [ $MIN_TOTAL -lt 540 ]; then
-            echo "→ 港股收盘后检测"
-            python stock_monitor.py close_hk
-
-          # 09:00-09:59 (540-599) → 港股日报（计划 09:00）
-          elif [ $MIN_TOTAL -ge 540 ] && [ $MIN_TOTAL -lt 600 ]; then
-            echo "→ 港股日报"
-            python stock_monitor.py daily_hk
-
-          # 21:25-21:59 (1285-1319) → 美股收盘后检测（计划 21:30）
-          elif [ $MIN_TOTAL -ge 1285 ] && [ $MIN_TOTAL -lt 1320 ]; then
-            echo "→ 美股收盘后检测"
-            python stock_monitor.py close_us
-
-          # 22:00-22:59 (1320-1379) → 美股日报（计划 22:00）
-          elif [ $MIN_TOTAL -ge 1320 ] && [ $MIN_TOTAL -lt 1380 ]; then
-            echo "→ 美股日报"
-            python stock_monitor.py daily_us
-
-          else
-            # 盘中监控：A股、港股、美股各自独立推送，由 Python 判断是否开盘
-            # A股时段：UTC 01:30-07:00（北京 09:30-15:00）
-            if [ $MIN_TOTAL -ge 90 ] && [ $MIN_TOTAL -lt 420 ]; then
+          # 定时触发：直接用触发的 cron 表达式匹配模式，避免时间区间歧义
+          echo "触发 cron：$TRIGGER_SCHEDULE"
+          case "$TRIGGER_SCHEDULE" in
+            "*/5 1-6 * * 1-5")
               echo "→ A股盘中监控"
               python stock_monitor.py intraday_a
-            fi
-            # 港股时段：UTC 01:30-08:00（港股 09:30-16:00）
-            if [ $MIN_TOTAL -ge 90 ] && [ $MIN_TOTAL -lt 480 ]; then
+              ;;
+            "2-59/5 1-7 * * 1-5")
               echo "→ 港股盘中监控"
               python stock_monitor.py intraday_hk
-            fi
-            # 美股时段：由 Python 通过 SPY marketState 判断是否正式开盘
-            if [ $MIN_TOTAL -ge 720 ] && [ $MIN_TOTAL -lt 1320 ]; then
+              ;;
+            "4-59/5 13-20 * * 1-5")
               echo "→ 美股盘中监控"
               python stock_monitor.py intraday_us
-            fi
-          fi
+              ;;
+            "30 7 * * 1-5")
+              echo "→ A股收盘后检测"
+              python stock_monitor.py close_a
+              ;;
+            "30 8 * * 1-5")
+              echo "→ 港股收盘后检测"
+              python stock_monitor.py close_hk
+              ;;
+            "30 21 * * 1-5")
+              echo "→ 美股收盘后检测"
+              python stock_monitor.py close_us
+              ;;
+            "0 8 * * 1-5")
+              echo "→ A股日报"
+              python stock_monitor.py daily_a
+              ;;
+            "0 9 * * 1-5")
+              echo "→ 港股日报"
+              python stock_monitor.py daily_hk
+              ;;
+            "0 22 * * 1-5")
+              echo "→ 美股日报"
+              python stock_monitor.py daily_us
+              ;;
+            *)
+              echo "未知触发 cron：$TRIGGER_SCHEDULE"
+              exit 1
+              ;;
+          esac
