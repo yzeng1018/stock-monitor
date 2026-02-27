@@ -85,13 +85,13 @@ def save_alerted_today(new_symbols):
 US_STOCKS = [
     "GOOG", "PDD", "NIO", "TSM", "AMZN", "CRCL", "SBUX", "BKNG",
     "META", "ABNB", "DUOL", "AAPL", "UBER", "FUTU", "XNET", "NVDA",
-    "DIDIY", "FIG", "BEKE", "EDU", "HOOD", "LKNCY", "TAL", "SE",
-    "DASH", "TSLA", "MELI", "LI", "GOTU", "ZH", "XPEV", "BIDU",
-    "SY", "TCOM", "PONY", "BILI", "WRD", "RBLX", "LU", "APP", "SOFI", "OWL"
+    "DIDIY", "FIG", "BEKE", "EDU", "LKNCY", "TAL", "SE",
+    "DASH", "TSLA", "MELI", "LI", "GOTU", "XPEV", "BIDU",
+    "SY", "TCOM", "PONY", "BILI", "WRD", "LU", "APP", "SOFI", "OWL"
 ]
 
 HK_STOCKS = [
-    "02513.HK", "00100.HK", "02252.HK", "08083.HK", "02559.HK",
+    "02513.HK", "00100.HK", "02252.HK", "08083.HK",
     "02550.HK", "06030.HK", "00853.HK", "02333.HK", "02013.HK",
     "03750.HK", "03690.HK", "01797.HK", "09618.HK", "00700.HK",
     "01211.HK", "09868.HK", "09992.HK", "01024.HK", "01810.HK",
