@@ -87,7 +87,7 @@ US_STOCKS = [
     "META", "ABNB", "DUOL", "AAPL", "UBER", "FUTU", "XNET", "NVDA",
     "DIDIY", "FIG", "BEKE", "EDU", "HOOD", "LKNCY", "TAL", "SE",
     "DASH", "TSLA", "MELI", "LI", "GOTU", "ZH", "XPEV", "BIDU",
-    "SY", "TCOM", "PONY", "BILI", "WRD", "RBLX", "LU"
+    "SY", "TCOM", "PONY", "BILI", "WRD", "RBLX", "LU", "APP", "SOFI", "OWL"
 ]
 
 HK_STOCKS = [

@@ -2,7 +2,7 @@
   {
     "name": "WLS",
     "email": "lydia_6598wang@hotmail.com",
-    "us_stocks": ["GOOG", "AMZN", "META", "AAPL", "NVDA", "TSLA", "NIO", "SBUX", "DUOL", "FUTU", "EDU", "SE", "LI", "BIDU", "TCOM", "BILI", "RBLX", "HOOD", "ZH", "LU", "LYFT"],
+    "us_stocks": ["GOOG", "AMZN", "META", "AAPL", "NVDA", "TSLA", "NIO", "SBUX", "DUOL", "FUTU", "EDU", "SE", "LI", "BIDU", "TCOM", "BILI", "RBLX", "HOOD", "ZH", "LU", "LYFT", "APP", "SOFI", "OWL"],
     "hk_stocks": ["00700.HK", "09988.HK", "09618.HK", "03690.HK", "01211.HK", "09868.HK", "01024.HK", "09992.HK", "02333.HK", "02559.HK", "06030.HK", "00981.HK"],
     "a_stocks": ["600519", "300750", "688981", "600030", "002230", "601318", "688207", "300418"]
   }
