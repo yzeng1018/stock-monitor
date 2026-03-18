@@ -42,7 +42,6 @@ import akshare as ak
 import openai
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
-import time
 
 # ============================================================
 # 配置区域
@@ -93,20 +92,20 @@ US_STOCKS = [
     "META", "ABNB", "DUOL", "AAPL", "UBER", "FUTU", "XNET", "NVDA",
     "DIDIY", "FIG", "BEKE", "EDU", "LKNCY", "TAL", "SE",
     "DASH", "TSLA", "MELI", "LI", "GOTU", "XPEV", "BIDU",
-    "SY", "TCOM", "PONY", "BILI", "WRD", "LU", "APP", "SOFI", "OWL"
+    "SY", "TCOM", "PONY", "BILI", "LU", "APP", "SOFI", "OWL"
 ]
 
 HK_STOCKS = [
     "02513.HK", "00100.HK", "02252.HK", "08083.HK",
-    "02550.HK", "06030.HK", "00853.HK", "02333.HK", "02013.HK",
-    "03750.HK", "03690.HK", "01797.HK", "09618.HK", "00700.HK",
+    "06030.HK", "00853.HK", "02333.HK", "02013.HK",
+    "03750.HK", "03690.HK", "09618.HK", "00700.HK",
     "01211.HK", "09868.HK", "09992.HK", "01024.HK", "01810.HK",
     "00981.HK", "02643.HK", "09988.HK", "09626.HK"
 ]
 
 A_STOCKS = [
     "688207", "688256", "688981", "600519", "688277", "603019",
-    "000034", "600030", "002594", "300896", "002230", "601318",
+    "600030", "002594", "002230", "601318",
     "300750", "000737", "300418"
 ]
 
@@ -165,10 +164,12 @@ def send_email(to_addr, subject, content_md):
         print(f"  FAIL 邮件发送失败：{e}")
 
 
+_USERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.json")
+
 def load_users():
     """读取 users.json，返回用户列表"""
     try:
-        with open("users.json", "r", encoding="utf-8") as f:
+        with open(_USERS_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception as e:
         print(f"WARNING 读取 users.json 失败: {e}")
@@ -415,15 +416,22 @@ def get_intraday_a():
 
 
 def _is_us_regular_session():
-    """通过 yfinance 查询 SPY 的 marketState，确认美股是否处于正式交易时段。
+    """通过 Yahoo Finance chart API 查询 SPY 的 marketState，确认美股是否处于正式交易时段。
     自动处理夏令时(EDT)、冬令时(EST)和节假日，只有 REGULAR 才返回 True。
     """
-    utc_min = datetime.utcnow().hour * 60 + datetime.utcnow().minute
+    now = datetime.utcnow()
+    utc_min = now.hour * 60 + now.minute
+    # UTC 时间快速预判：明显不在美股窗口内（UTC 12:00-22:00）时直接返回 False，省去 API 调用
     if not (720 <= utc_min < 1320):
         return False
     try:
-        state = yf.Ticker("SPY").info.get("marketState", "CLOSED")
-        return state == "REGULAR"
+        resp = requests.get(
+            "https://query1.finance.yahoo.com/v8/finance/chart/SPY",
+            params={"interval": "1d", "range": "1d"},
+            timeout=5,
+        )
+        meta = resp.json()["chart"]["result"][0]["meta"]
+        return meta.get("marketState", "CLOSED") == "REGULAR"
     except Exception:
         return 870 <= utc_min < 1260
 
@@ -460,6 +468,7 @@ def run_intraday(market=None):
         print("当前无开盘市场，跳过监控")
         return
 
+    alerted_today = load_alerted_today()
     for mkt in targets:
         mkt_name = name_map[mkt]
         if not open_status.get(mkt, False):
@@ -470,7 +479,6 @@ def run_intraday(market=None):
         stocks = fetch_map[mkt]()
         print(f"成功获取 {len(stocks)} 支{mkt_name}实时数据")
 
-        alerted_today = load_alerted_today()
         triggered = sorted(
             [s for s in stocks
              if abs(s["change_pct"]) >= PRICE_CHANGE_THRESHOLD
@@ -513,6 +521,7 @@ def run_intraday(market=None):
             content
         )
         save_alerted_today([s["symbol"] for s in triggered])
+        alerted_today.update(s["symbol"] for s in triggered)
         print(f"{mkt_name}共 {len(alert_lines)} 条异动，已汇总推送")
 
 
@@ -570,7 +579,7 @@ def get_close_data_us(symbols):
 def get_close_data_hk():
     """获取港股收盘价 + 历史数据（yfinance），返回 (results, failed)"""
     def _fetch(sym):
-        code_4d = f"{int(sym.replace('.HK', '')):04d}.HK"
+        code_4d = _hk_to_yf(sym)
         try:
             hist = yf.Ticker(code_4d).history(period="60d")
             if hist.empty or len(hist) < 22:
@@ -746,6 +755,18 @@ def run_close_check(market):
 # 模式四/五/六：日报（大盘指数 + 个股 + Qwen新闻摘要）
 # ============================================================
 
+_qwen_client = None
+
+def _get_qwen_client():
+    global _qwen_client
+    if _qwen_client is None and DASHSCOPE_API_KEY:
+        _qwen_client = openai.OpenAI(
+            api_key=DASHSCOPE_API_KEY,
+            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        )
+    return _qwen_client
+
+
 def get_news_summary(symbol, name, market):
     """获取股票新闻并用 Qwen 总结（最多10条新闻，含内容摘要）"""
     news_texts = []
@@ -782,10 +803,7 @@ def get_news_summary(symbol, name, market):
         return "（未配置 DASHSCOPE_API_KEY）\n" + "\n".join(news_texts[:3])
 
     try:
-        client = openai.OpenAI(
-            api_key=DASHSCOPE_API_KEY,
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        )
+        client = _get_qwen_client()
         prompt = (
             f"以下是{name}（{symbol}）的最新相关新闻：\n"
             + "\n".join(news_texts)
@@ -856,7 +874,7 @@ def get_daily_data_hk(stock_list=None):
         stock_list = HK_STOCKS
 
     def _fetch(sym):
-        code_4d = f"{int(sym.replace('.HK', '')):04d}.HK"
+        code_4d = _hk_to_yf(sym)
         try:
             hist = yf.Ticker(code_4d).history(period="30d")
             if hist.empty or len(hist) < 5:
