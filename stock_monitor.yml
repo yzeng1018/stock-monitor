@@ -3,15 +3,19 @@ name: 股票异动监控
 on:
   schedule:
     # A股/港股盘中监控 + A股收盘检测(07:30) + A股日报(08:00) + 港股收盘检测(08:30)
-    # UTC 01:00-08:45，工作日每15分钟
+    # UTC 01:00-08:45，工作日每15分钟（周五 08:45 触发 A股周报）
     - cron: "*/15 1-8 * * 1-5"
     # 港股日报 (UTC 09:00，工作日)
     - cron: "0 9 * * 1-5"
+    # 港股周报 (UTC 09:45，每周五)
+    - cron: "45 9 * * 5"
     # 美股盘中监控 + 美股收盘检测(21:30)
     # UTC 14:00-21:45，工作日每15分钟
     - cron: "*/15 14-21 * * 1-5"
     # 美股日报 (UTC 22:00，工作日)
     - cron: "0 22 * * 1-5"
+    # 美股周报 (UTC 22:45，每周五)
+    - cron: "45 22 * * 5"
   workflow_dispatch:  # 允许手动触发
 
 jobs:
@@ -21,6 +25,26 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
+
+      - name: 获取当前日期
+        id: date
+        run: echo "date=$(date -u +%Y-%m-%d)" >> $GITHUB_OUTPUT
+
+      - name: 恢复今日推送去重缓存
+        uses: actions/cache@v4
+        with:
+          path: alerted_today.json
+          # run_id 保证每次都存新缓存；restore-keys 前缀匹配当天最新缓存
+          key: alerted-${{ steps.date.outputs.date }}-${{ github.run_id }}
+          restore-keys: alerted-${{ steps.date.outputs.date }}-
+
+      - name: 恢复股票名称缓存
+        uses: actions/cache@v4
+        with:
+          path: stock_names.json
+          # 同样策略：每次存新快照，restore 取最新
+          key: stock-names-${{ github.run_id }}
+          restore-keys: stock-names-
 
       - name: 设置 Python
         uses: actions/setup-python@v5
@@ -39,7 +63,8 @@ jobs:
         run: |
           MINUTE=$(date -u +"%M")
           HOUR=$(date -u +"%H")
-          echo "当前 UTC 时间: ${HOUR}:${MINUTE}"
+          DOW=$(date -u +"%u")   # 1=周一 ... 5=周五 ... 7=周日
+          echo "当前 UTC 时间: ${HOUR}:${MINUTE} 周${DOW}"
 
           if [ "$HOUR" = "07" ] && [ "$MINUTE" = "30" ]; then
             echo "运行 A股收盘检测..."
@@ -50,15 +75,24 @@ jobs:
           elif [ "$HOUR" = "08" ] && [ "$MINUTE" = "30" ]; then
             echo "运行 港股收盘检测..."
             python stock_monitor.py close_hk
+          elif [ "$HOUR" = "08" ] && [ "$MINUTE" = "45" ] && [ "$DOW" = "5" ]; then
+            echo "运行 A股周报..."
+            python stock_monitor.py weekly_a
           elif [ "$HOUR" = "09" ] && [ "$MINUTE" = "00" ]; then
             echo "运行 港股日报..."
             python stock_monitor.py daily_hk
+          elif [ "$HOUR" = "09" ] && [ "$MINUTE" = "45" ] && [ "$DOW" = "5" ]; then
+            echo "运行 港股周报..."
+            python stock_monitor.py weekly_hk
           elif [ "$HOUR" = "21" ] && [ "$MINUTE" = "30" ]; then
             echo "运行 美股收盘检测..."
             python stock_monitor.py close_us
           elif [ "$HOUR" = "22" ] && [ "$MINUTE" = "00" ]; then
             echo "运行 美股日报..."
             python stock_monitor.py daily_us
+          elif [ "$HOUR" = "22" ] && [ "$MINUTE" = "45" ] && [ "$DOW" = "5" ]; then
+            echo "运行 美股周报..."
+            python stock_monitor.py weekly_us
           else
             echo "运行盘中监控..."
             python stock_monitor.py intraday
