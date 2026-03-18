@@ -16,6 +16,12 @@ on:
     - cron: "0 22 * * 1-5"
     # 美股周报 (UTC 22:45，每周五)
     - cron: "45 22 * * 5"
+    # 加密货币每日快照检测 (UTC 12:00，每天含周末)
+    - cron: "0 12 * * *"
+    # 加密货币日报 (UTC 00:00，每天含周末，北京时间 08:00)
+    - cron: "0 0 * * *"
+    # 加密货币周报 (UTC 00:30，每周日)
+    - cron: "30 0 * * 0"
   workflow_dispatch:
     inputs:
       mode:
@@ -75,6 +81,12 @@ jobs:
           if [ -n "$MANUAL_MODE" ]; then
             echo "手动模式：${MANUAL_MODE}"
             python stock_monitor.py $MANUAL_MODE
+          elif [ "$HOUR" = "00" ] && [ "$MINUTE" = "00" ]; then
+            echo "运行 加密货币日报..."
+            python stock_monitor.py daily_crypto
+          elif [ "$HOUR" = "00" ] && [ "$MINUTE" = "30" ] && [ "$DOW" = "7" ]; then
+            echo "运行 加密货币周报..."
+            python stock_monitor.py weekly_crypto
           elif [ "$HOUR" = "07" ] && [ "$MINUTE" = "30" ]; then
             echo "运行 A股收盘检测..."
             python stock_monitor.py close_a
@@ -93,6 +105,9 @@ jobs:
           elif [ "$HOUR" = "09" ] && [ "$MINUTE" = "45" ] && [ "$DOW" = "5" ]; then
             echo "运行 港股周报..."
             python stock_monitor.py weekly_hk
+          elif [ "$HOUR" = "12" ] && [ "$MINUTE" = "00" ]; then
+            echo "运行 加密货币快照检测..."
+            python stock_monitor.py close_crypto
           elif [ "$HOUR" = "21" ] && [ "$MINUTE" = "30" ]; then
             echo "运行 美股收盘检测..."
             python stock_monitor.py close_us

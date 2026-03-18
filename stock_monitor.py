@@ -1,18 +1,21 @@
 """
 股票异动监控脚本 v3
-支持美股、港股、A股
+支持美股、港股、A股、加密货币
 
 运行模式：
-  intraday  - 盘中实时监控（每15分钟）：当日实时价 vs 昨日收盘 > ±5%，附近期新闻标题
-  close_a   - A股收盘后：条件2（30天新高/低）+ 条件3（量比）+ 条件4（MA20穿越）
-  close_hk  - 港股收盘后：同上
-  close_us  - 美股收盘后：同上
-  daily_a   - A股日报（收盘后1小时）：大盘指数 + 个股股价/涨跌/量比 + Qwen新闻摘要
-  daily_hk  - 港股日报：同上
-  daily_us  - 美股日报：同上
-  weekly_a  - A股周报（每周五）：本周涨跌幅排名 Top5
-  weekly_hk - 港股周报：同上
-  weekly_us - 美股周报：同上
+  intraday      - 盘中实时监控（每15分钟）：当日实时价 vs 昨日收盘 > ±5%，附近期新闻标题
+  close_a       - A股收盘后：条件2（30天新高/低）+ 条件3（量比）+ 条件4（MA20穿越）
+  close_hk      - 港股收盘后：同上
+  close_us      - 美股收盘后：同上
+  close_crypto  - 加密货币每日快照检测：同上
+  daily_a       - A股日报（收盘后1小时）：大盘指数 + 个股股价/涨跌/量比 + Qwen新闻摘要
+  daily_hk      - 港股日报：同上
+  daily_us      - 美股日报：同上
+  daily_crypto  - 加密货币日报：同上
+  weekly_a      - A股周报（每周五）：本周涨跌幅排名 Top5
+  weekly_hk     - 港股周报：同上
+  weekly_us     - 美股周报：同上
+  weekly_crypto - 加密货币周报：同上
 """
 
 import os
@@ -107,6 +110,11 @@ A_STOCKS = [
     "688207", "688256", "688981", "600519", "688277", "603019",
     "600030", "002594", "002230", "601318",
     "300750", "000737", "300418"
+]
+
+CRYPTO_SYMBOLS = [
+    "BTC-USD", "ETH-USD", "BNB-USD", "SOL-USD", "XRP-USD",
+    "DOGE-USD", "ADA-USD", "AVAX-USD", "DOT-USD", "LINK-USD",
 ]
 
 # ============================================================
@@ -209,7 +217,7 @@ def get_stock_name(symbol, market):
     美股直接返回 ticker，无需中文名。
     成功从新浪取到名称后自动更新本地缓存。
     """
-    if market == "美股":
+    if market in ["美股", "加密货币"]:
         return symbol
 
     cache = _ensure_name_cache()
@@ -242,9 +250,10 @@ def get_stock_name(symbol, market):
 # ============================================================
 
 _INDEX_MAP = {
-    "a":  [("000001.SS", "上证"), ("399001.SZ", "深成"), ("399006.SZ", "创业板")],
-    "hk": [("^HSI", "恒生"), ("^HSTECH", "恒生科技")],
-    "us": [("SPY", "SPY"), ("QQQ", "QQQ"), ("^DJI", "道指")],
+    "a":      [("000001.SS", "上证"), ("399001.SZ", "深成"), ("399006.SZ", "创业板")],
+    "hk":     [("^HSI", "恒生"), ("^HSTECH", "恒生科技")],
+    "us":     [("SPY", "SPY"), ("QQQ", "QQQ"), ("^DJI", "道指")],
+    "crypto": [("BTC-USD", "BTC"), ("ETH-USD", "ETH")],
 }
 
 
@@ -283,7 +292,7 @@ def get_intraday_news(symbol, market):
     """盘中异动时快速获取 1-2 条最新新闻标题（纯标题，不调用 Qwen）"""
     headlines = []
     try:
-        if market in ["美股", "港股"]:
+        if market in ["美股", "港股", "加密货币"]:
             yf_sym = (f"{int(symbol.replace('.HK', '')):04d}.HK"
                       if market == "港股" else symbol)
             for n in yf.Ticker(yf_sym).news[:2]:
@@ -415,6 +424,42 @@ def get_intraday_a():
     return results
 
 
+def get_intraday_crypto():
+    """用 yfinance 并发拉取加密货币实时价（24/7 全天候）"""
+    def _fetch(symbol):
+        try:
+            fi = yf.Ticker(symbol).fast_info
+            current    = fi.last_price
+            prev_close = fi.previous_close
+            if not current or not prev_close or prev_close == 0:
+                return None
+            change_pct = (current - prev_close) / prev_close * 100
+            vol     = getattr(fi, "last_volume", None)
+            avg_vol = getattr(fi, "three_month_average_volume", None)
+            vol_ratio = round(vol / avg_vol, 2) if vol and avg_vol else None
+            return {
+                "symbol":     symbol,
+                "name":       symbol,
+                "price":      round(float(current), 6),
+                "prev_close": round(float(prev_close), 6),
+                "change_pct": round(float(change_pct), 2),
+                "vol_ratio":  vol_ratio,
+                "market":     "加密货币",
+            }
+        except Exception as e:
+            print(f"  WARNING  {symbol} 实时数据获取失败: {e}")
+            return None
+
+    results = []
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {executor.submit(_fetch, s): s for s in CRYPTO_SYMBOLS}
+        for future in as_completed(futures):
+            r = future.result()
+            if r:
+                results.append(r)
+    return results
+
+
 def _is_us_regular_session():
     """通过 Yahoo Finance chart API 查询 SPY 的 marketState，确认美股是否处于正式交易时段。
     自动处理夏令时(EDT)、冬令时(EST)和节假日，只有 REGULAR 才返回 True。
@@ -445,15 +490,17 @@ def run_intraday(market=None):
     utc_min = now_utc.hour * 60 + now_utc.minute
 
     open_status = {
-        "a":  90  <= utc_min < 420,
-        "hk": 90  <= utc_min < 480,
-        "us": _is_us_regular_session(),
+        "a":      90  <= utc_min < 420,
+        "hk":     90  <= utc_min < 480,
+        "us":     _is_us_regular_session(),
+        "crypto": True,  # 加密货币 24/7
     }
-    name_map  = {"a": "A股", "hk": "港股", "us": "美股"}
+    name_map  = {"a": "A股", "hk": "港股", "us": "美股", "crypto": "加密货币"}
     fetch_map = {
-        "a":  get_intraday_a,
-        "hk": get_intraday_hk,
-        "us": lambda: get_intraday_us(US_STOCKS),
+        "a":      get_intraday_a,
+        "hk":     get_intraday_hk,
+        "us":     lambda: get_intraday_us(US_STOCKS),
+        "crypto": get_intraday_crypto,
     }
 
     targets = [market] if market else [m for m, o in open_status.items() if o]
@@ -462,7 +509,8 @@ def run_intraday(market=None):
           f"(UTC {now_utc.strftime('%H:%M')}) "
           f"A股:{'开' if open_status['a'] else '休'} "
           f"港股:{'开' if open_status['hk'] else '休'} "
-          f"美股:{'开' if open_status['us'] else '休'}")
+          f"美股:{'开' if open_status['us'] else '休'} "
+          f"加密货币:开")
 
     if not targets:
         print("当前无开盘市场，跳过监控")
@@ -672,6 +720,53 @@ def get_close_data_a():
     return results, failed
 
 
+def get_close_data_crypto():
+    """获取加密货币历史数据（用于条件2/3/4），返回 (results, failed)"""
+    def _fetch(symbol):
+        try:
+            hist = yf.Ticker(symbol).history(period="60d")
+            if hist.empty or len(hist) < 22:
+                return None
+            current_price = float(hist["Close"].iloc[-1])
+            prev_close    = float(hist["Close"].iloc[-2])
+            current_vol   = float(hist["Volume"].iloc[-1])
+            hist_30       = hist.iloc[-31:-1]
+            avg_vol_30    = float(hist_30["Volume"].mean())
+            max_price_30  = float(hist_30["Close"].max())
+            min_price_30  = float(hist_30["Close"].min())
+            vol_ratio     = current_vol / avg_vol_30 if avg_vol_30 > 0 else 0
+            ma20          = float(hist["Close"].iloc[-20:].mean())
+            prev_ma20     = float(hist["Close"].iloc[-21:-1].mean())
+            return {
+                "symbol":     symbol,
+                "name":       symbol,
+                "price":      round(current_price, 6),
+                "prev_close": round(prev_close, 6),
+                "volume":     int(current_vol),
+                "avg_vol_30": int(avg_vol_30),
+                "vol_ratio":  round(vol_ratio, 2),
+                "max_30d":    round(max_price_30, 6),
+                "min_30d":    round(min_price_30, 6),
+                "ma20":       round(ma20, 6),
+                "prev_ma20":  round(prev_ma20, 6),
+                "market":     "加密货币",
+            }
+        except Exception as e:
+            print(f"  WARNING  {symbol} 收盘数据获取失败: {e}")
+            return None
+
+    results, failed = [], []
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {executor.submit(_fetch, s): s for s in CRYPTO_SYMBOLS}
+        for future in as_completed(futures):
+            r = future.result()
+            if r:
+                results.append(r)
+            else:
+                failed.append(futures[future])
+    return results, failed
+
+
 def check_close_alerts(stock):
     """检查条件2（30天新高/低）+ 条件3（成交量异常）+ 条件4（MA20穿越）"""
     triggered = []
@@ -708,13 +803,15 @@ def check_close_alerts(stock):
 
 def run_close_check(market):
     """收盘后检测模式，汇总推送一条，末尾附失败列表"""
-    market_name = {"a": "A股", "hk": "港股", "us": "美股"}[market]
+    market_name = {"a": "A股", "hk": "港股", "us": "美股", "crypto": "加密货币"}[market]
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] {market_name}收盘后检测...")
 
     if market == "a":
         stocks, failed = get_close_data_a()
     elif market == "hk":
         stocks, failed = get_close_data_hk()
+    elif market == "crypto":
+        stocks, failed = get_close_data_crypto()
     else:
         stocks, failed = get_close_data_us(US_STOCKS)
 
@@ -772,7 +869,7 @@ def get_news_summary(symbol, name, market):
     news_texts = []
 
     try:
-        if market in ["美股", "港股"]:
+        if market in ["美股", "港股", "加密货币"]:
             yf_sym = f"{int(symbol.replace('.HK', '')):04d}.HK" if market == "港股" else symbol
             ticker = yf.Ticker(yf_sym)
             for n in ticker.news[:10]:
@@ -954,27 +1051,75 @@ def get_daily_data_a(stock_list=None):
     return results, failed
 
 
+def get_daily_data_crypto(stock_list=None):
+    """获取加密货币日报数据，返回 (results, failed)"""
+    if stock_list is None:
+        stock_list = CRYPTO_SYMBOLS
+
+    def _fetch(symbol):
+        try:
+            hist = yf.Ticker(symbol).history(period="30d")
+            if hist.empty or len(hist) < 5:
+                return None
+            close      = float(hist["Close"].iloc[-1])
+            prev       = float(hist["Close"].iloc[-2])
+            change_pct = (close - prev) / prev * 100
+            vol        = float(hist["Volume"].iloc[-1])
+            avg_vol_7  = hist["Volume"].iloc[-8:-1].mean()
+            vol_ratio  = vol / avg_vol_7 if avg_vol_7 > 0 else 0
+            return {
+                "symbol":     symbol,
+                "name":       symbol,
+                "price":      round(close, 6),
+                "change_pct": round(change_pct, 2),
+                "volume":     int(vol),
+                "avg_vol_7":  int(avg_vol_7),
+                "vol_ratio":  round(float(vol_ratio), 2),
+                "market":     "加密货币",
+            }
+        except Exception as e:
+            print(f"  WARNING  {symbol} 历史数据失败: {e}")
+            return None
+
+    results, failed = [], []
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {executor.submit(_fetch, s): s for s in stock_list}
+        for future in as_completed(futures):
+            r = future.result()
+            if r:
+                results.append(r)
+            else:
+                failed.append(futures[future])
+    return results, failed
+
+
 def run_daily_report(market, user=None):
     """
     日报模式：大盘指数 + 个股（并发获取新闻摘要）+ 失败列表。
     user=None  → owner，使用全局股票列表，通过 PushPlus 推送微信
     user=dict  → 外部用户，使用其自定义列表，通过 Email 推送
     """
-    market_name = {"a": "A股", "hk": "港股", "us": "美股"}[market]
+    market_name = {"a": "A股", "hk": "港股", "us": "美股", "crypto": "加密货币"}[market]
     tag = f"（{user['name']}）" if user else ""
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] 生成{market_name}日报{tag}...")
 
     if user:
-        us_list = user.get("us_stocks") or []
-        hk_list = user.get("hk_stocks") or []
-        a_list  = user.get("a_stocks")  or []
+        us_list     = user.get("us_stocks")     or []
+        hk_list     = user.get("hk_stocks")     or []
+        a_list      = user.get("a_stocks")      or []
+        crypto_list = user.get("crypto_stocks") or []
     else:
-        us_list = hk_list = a_list = None
+        us_list = hk_list = a_list = crypto_list = None
 
     if market == "a":
         stocks, failed = get_daily_data_a(a_list)
     elif market == "hk":
         stocks, failed = get_daily_data_hk(hk_list)
+    elif market == "crypto":
+        if user and not crypto_list:
+            print(f"加密货币日报：{user['name']} 无 crypto_stocks 配置，跳过")
+            return
+        stocks, failed = get_daily_data_crypto(crypto_list)
     else:
         stocks, failed = get_daily_data_us(us_list)
 
@@ -1050,14 +1195,14 @@ def get_weekly_data(symbols, market):
     """
     获取本周涨跌幅（最近5个交易日）。
     返回 (results, failed)，每条包含 symbol/name/week_open/week_close/week_change_pct。
-    market 为中文字符串："A股"/"港股"/"美股"
+    market 为中文字符串："A股"/"港股"/"美股"/"加密货币"
     """
     def _to_yf(sym):
         if market == "A股":
             return f"{sym}.SS" if sym.startswith("6") else f"{sym}.SZ"
         elif market == "港股":
             return f"{int(sym.replace('.HK', '')):04d}.HK"
-        return sym
+        return sym  # 美股 / 加密货币：ticker 已是 yfinance 格式
 
     def _fetch(sym):
         yf_sym = _to_yf(sym)
@@ -1084,7 +1229,7 @@ def get_weekly_data(symbols, market):
             print(f"  WARNING  {yf_sym} 周数据失败: {e}")
             return None
 
-    workers = 8 if market == "美股" else 5
+    workers = 8 if market in ["美股", "加密货币"] else 5
     results, failed = [], []
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {executor.submit(_fetch, s): s for s in symbols}
@@ -1102,18 +1247,19 @@ def run_weekly_report(market, user=None):
     周报：今日大盘 + 本周涨幅 Top5 / 跌幅 Top5。
     user=None → owner (PushPlus)，user=dict → Email
     """
-    market_name = {"a": "A股", "hk": "港股", "us": "美股"}[market]
+    market_name = {"a": "A股", "hk": "港股", "us": "美股", "crypto": "加密货币"}[market]
     tag = f"（{user['name']}）" if user else ""
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] 生成{market_name}周报{tag}...")
 
     if user:
         sym_map = {
-            "a":  user.get("a_stocks")  or [],
-            "hk": user.get("hk_stocks") or [],
-            "us": user.get("us_stocks") or [],
+            "a":      user.get("a_stocks")      or [],
+            "hk":     user.get("hk_stocks")     or [],
+            "us":     user.get("us_stocks")      or [],
+            "crypto": user.get("crypto_stocks") or [],
         }
     else:
-        sym_map = {"a": A_STOCKS, "hk": HK_STOCKS, "us": US_STOCKS}
+        sym_map = {"a": A_STOCKS, "hk": HK_STOCKS, "us": US_STOCKS, "crypto": CRYPTO_SYMBOLS}
 
     symbols = sym_map[market]
     if not symbols:
@@ -1191,24 +1337,32 @@ if __name__ == "__main__":
         run_intraday("hk")
     elif mode == "intraday_us":
         run_intraday("us")
+    elif mode == "intraday_crypto":
+        run_intraday("crypto")
     elif mode == "close_a":
         run_close_check("a")
     elif mode == "close_hk":
         run_close_check("hk")
     elif mode == "close_us":
         run_close_check("us")
+    elif mode == "close_crypto":
+        run_close_check("crypto")
     elif mode == "daily_a":
         run_daily_report_all("a")
     elif mode == "daily_hk":
         run_daily_report_all("hk")
     elif mode == "daily_us":
         run_daily_report_all("us")
+    elif mode == "daily_crypto":
+        run_daily_report_all("crypto")
     elif mode == "weekly_a":
         run_weekly_report_all("a")
     elif mode == "weekly_hk":
         run_weekly_report_all("hk")
     elif mode == "weekly_us":
         run_weekly_report_all("us")
+    elif mode == "weekly_crypto":
+        run_weekly_report_all("crypto")
     else:
-        print(f"未知模式：{mode}，可选：intraday / close_a/hk/us / daily_a/hk/us / weekly_a/hk/us")
+        print(f"未知模式：{mode}，可选：intraday / close_a/hk/us/crypto / daily_a/hk/us/crypto / weekly_a/hk/us/crypto")
         sys.exit(1)
