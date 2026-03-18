@@ -579,7 +579,7 @@ def get_close_data_us(symbols):
 def get_close_data_hk():
     """获取港股收盘价 + 历史数据（yfinance），返回 (results, failed)"""
     def _fetch(sym):
-        code_4d = _hk_to_yf(sym)
+        code_4d = f"{int(sym.replace('.HK', '')):04d}.HK"
         try:
             hist = yf.Ticker(code_4d).history(period="60d")
             if hist.empty or len(hist) < 22:
@@ -874,7 +874,7 @@ def get_daily_data_hk(stock_list=None):
         stock_list = HK_STOCKS
 
     def _fetch(sym):
-        code_4d = _hk_to_yf(sym)
+        code_4d = f"{int(sym.replace('.HK', '')):04d}.HK"
         try:
             hist = yf.Ticker(code_4d).history(period="30d")
             if hist.empty or len(hist) < 5:
