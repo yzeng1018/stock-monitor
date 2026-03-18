@@ -16,7 +16,12 @@ on:
     - cron: "0 22 * * 1-5"
     # 美股周报 (UTC 22:45，每周五)
     - cron: "45 22 * * 5"
-  workflow_dispatch:  # 允许手动触发
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '手动指定运行模式（留空则按时间自动判断）'
+        required: false
+        default: ''
 
 jobs:
   monitor:
@@ -61,12 +66,16 @@ jobs:
           SMTP_PASSWORD:     ${{ secrets.SMTP_PASSWORD }}
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
         run: |
+          MANUAL_MODE="${{ github.event.inputs.mode }}"
           MINUTE=$(date -u +"%M")
           HOUR=$(date -u +"%H")
           DOW=$(date -u +"%u")   # 1=周一 ... 5=周五 ... 7=周日
           echo "当前 UTC 时间: ${HOUR}:${MINUTE} 周${DOW}"
 
-          if [ "$HOUR" = "07" ] && [ "$MINUTE" = "30" ]; then
+          if [ -n "$MANUAL_MODE" ]; then
+            echo "手动模式：${MANUAL_MODE}"
+            python stock_monitor.py $MANUAL_MODE
+          elif [ "$HOUR" = "07" ] && [ "$MINUTE" = "30" ]; then
             echo "运行 A股收盘检测..."
             python stock_monitor.py close_a
           elif [ "$HOUR" = "08" ] && [ "$MINUTE" = "00" ]; then
