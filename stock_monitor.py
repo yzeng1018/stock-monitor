@@ -95,7 +95,13 @@ US_STOCKS = [
     "META", "ABNB", "DUOL", "AAPL", "UBER", "FUTU", "XNET", "NVDA",
     "DIDIY", "FIG", "BEKE", "EDU", "LKNCY", "TAL", "SE",
     "DASH", "TSLA", "MELI", "LI", "GOTU", "XPEV", "BIDU",
-    "SY", "TCOM", "PONY", "BILI", "LU", "APP", "SOFI", "OWL"
+    "SY", "TCOM", "PONY", "BILI", "LU", "APP", "SOFI", "OWL",
+    # 持仓补录
+    "XYZ",                  # Block（原 Square）
+    "GLD",                  # 黄金 ETF（与黄金ETF华安锚定）
+    # 多伦多房市影子指标
+    "REI-UN.TO",            # RioCan REIT（加拿大最大零售REIT）
+    "CAR-UN.TO",            # Canadian Apartment REIT（多伦多公寓市场代理）
 ]
 
 HK_STOCKS = [
@@ -103,13 +109,15 @@ HK_STOCKS = [
     "06030.HK", "00853.HK", "02333.HK", "02013.HK",
     "03750.HK", "03690.HK", "09618.HK", "00700.HK",
     "01211.HK", "09868.HK", "09992.HK", "01024.HK", "01810.HK",
-    "00981.HK", "02643.HK", "09988.HK", "09626.HK"
+    "00981.HK", "02643.HK", "09988.HK", "09626.HK",
+    "09866.HK",  # 蔚来汽车（持仓 9100 股，漏录）
 ]
 
 A_STOCKS = [
     "688207", "688256", "688981", "600519", "688277", "603019",
-    "600030", "002594", "002230", "601318",
+    "600030", "600036", "002594", "002230", "601318",
     "300750", "000737", "300418"
+    # 600036 = 招商银行（持仓 5100 股，漏录）
 ]
 
 CRYPTO_SYMBOLS = [
@@ -254,6 +262,13 @@ _INDEX_MAP = {
     "hk":     [("^HSI", "恒生"), ("^HSTECH", "恒生科技")],
     "us":     [("SPY", "SPY"), ("QQQ", "QQQ"), ("^DJI", "道指")],
     "crypto": [("BTC-USD", "BTC"), ("ETH-USD", "ETH")],
+    # 宏观参考：汇率 + 美债收益率（每份日报底部附加显示）
+    "macro":  [
+        ("CNY=X",     "USD/CNY"),   # 美元/人民币
+        ("CADCNY=X",  "CAD/CNY"),   # 加元/人民币（多伦多房产风险敞口）
+        ("HKDCNY=X",  "HKD/CNY"),   # 港元/人民币
+        ("^TNX",      "美10Y"),      # 美国10年期国债收益率
+    ],
 }
 
 
@@ -1144,9 +1159,11 @@ def run_daily_report(market, user=None):
             except Exception:
                 summaries[sym] = "新闻摘要获取失败"
 
-    # 大盘指数
+    # 大盘指数 + 宏观参考
     indices      = get_market_indices(market)
     indices_line = _format_indices(indices)
+    macro        = get_market_indices("macro")
+    macro_line   = _format_indices(macro)
 
     blocks = []
     for stock in stocks:
@@ -1165,6 +1182,7 @@ def run_daily_report(market, user=None):
         f"## {market_name}日报（{now_str}）",
         f"共 **{len(stocks)}** 支股票",
         f"**今日大盘：** {indices_line}",
+        f"**汇率/宏观：** {macro_line}",
     ])
     sections = [header] + blocks
     if failed:
