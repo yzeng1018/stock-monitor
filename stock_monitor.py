@@ -56,6 +56,7 @@ SMTP_HOST     = "smtp.gmail.com"
 SMTP_PORT     = 587
 SMTP_USER     = os.environ.get("SMTP_USER", "")
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+OWNER_EMAIL   = os.environ.get("OWNER_EMAIL", "") or os.environ.get("SMTP_USER", "")
 
 PRICE_CHANGE_THRESHOLD = 5.0  # 盘中涨跌幅阈值（%）
 VOLUME_MULTIPLIER      = 1.8  # 收盘后成交量倍数阈值
@@ -1200,6 +1201,8 @@ def run_daily_report(market, user=None):
         send_email(user["email"], title, content)
     else:
         send_to_wechat(title, content)
+        if OWNER_EMAIL:
+            send_email(OWNER_EMAIL, title, content)
 
     print(f"{market_name}日报已推送{tag}，共 {len(stocks)} 支，失败 {len(failed)} 支")
 
@@ -1335,6 +1338,8 @@ def run_weekly_report(market, user=None):
         send_email(user["email"], title, content)
     else:
         send_to_wechat(title, content)
+        if OWNER_EMAIL:
+            send_email(OWNER_EMAIL, title, content)
 
     print(f"{market_name}周报已推送{tag}，共 {len(stocks)} 支，失败 {len(failed)} 支")
 
