@@ -874,6 +874,10 @@ def run_close_check(market):
 # 模式四/五/六：日报（大盘指数 + 个股 + Qwen新闻摘要）
 # ============================================================
 
+GATEWAY_URL     = os.environ.get("GATEWAY_URL", "http://localhost:8000/v1")
+GATEWAY_API_KEY = os.environ.get("GATEWAY_API_KEY", "dummy")
+_DASHSCOPE_URL  = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
 _qwen_client = None
 
 def _get_qwen_client():
@@ -881,9 +885,27 @@ def _get_qwen_client():
     if _qwen_client is None and DASHSCOPE_API_KEY:
         _qwen_client = openai.OpenAI(
             api_key=DASHSCOPE_API_KEY,
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            base_url=_DASHSCOPE_URL,
         )
     return _qwen_client
+
+
+def _llm_complete(messages: list, max_tokens: int = 600, temperature: float = 0.3) -> str:
+    """Call LLM via local gateway; fall back to Qwen/DashScope if gateway offline."""
+    try:
+        client = openai.OpenAI(api_key=GATEWAY_API_KEY, base_url=GATEWAY_URL)
+        resp = client.chat.completions.create(
+            model="auto", messages=messages, max_tokens=max_tokens, temperature=temperature
+        )
+        return resp.choices[0].message.content.strip()
+    except openai.APIConnectionError:
+        client = _get_qwen_client()
+        if client is None:
+            raise RuntimeError("Gateway offline and DASHSCOPE_API_KEY not configured")
+        resp = client.chat.completions.create(
+            model="qwen-plus", messages=messages, max_tokens=max_tokens, temperature=temperature
+        )
+        return resp.choices[0].message.content.strip()
 
 
 def get_news_summary(symbol, name, market):
@@ -918,11 +940,7 @@ def get_news_summary(symbol, name, market):
     if not news_texts:
         return "暂无近期新闻"
 
-    if not DASHSCOPE_API_KEY:
-        return "（未配置 DASHSCOPE_API_KEY）\n" + "\n".join(news_texts[:3])
-
     try:
-        client = _get_qwen_client()
         prompt = (
             f"以下是{name}（{symbol}）的最新相关新闻：\n"
             + "\n".join(news_texts)
@@ -933,13 +951,7 @@ def get_news_summary(symbol, name, market):
             + "4. 行业或宏观层面的重要背景\n"
             + "用中文回答，约200-300字，条理清晰，重点突出。"
         )
-        resp = client.chat.completions.create(
-            model="qwen-plus",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=600,
-            temperature=0.3,
-        )
-        return resp.choices[0].message.content.strip()
+        return _llm_complete([{"role": "user", "content": prompt}])
     except Exception as e:
         print(f"  WARNING  {symbol} Qwen摘要失败: {e}")
         return "新闻摘要获取失败"
