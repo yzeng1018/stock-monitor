@@ -106,6 +106,7 @@ US_STOCKS = [
     # 分散化配置参考
     "TLT",                  # 美国长债 ETF（降息周期对冲，^TNX 镜像）
     "INDA",                 # 印度市场 ETF（高成长大经济体，唯一缺口）
+    "AMADY",                # Amadeus IT Group（旅游科技，OTC ADR）
 ]
 
 HK_STOCKS = [

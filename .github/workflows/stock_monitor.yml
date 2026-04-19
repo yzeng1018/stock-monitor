@@ -2,12 +2,6 @@ name: 股票异动监控 v2
 
 on:
   schedule:
-    # A股盘中监控：UTC 01:30-07:00（北京 09:30-15:00），每5分钟整点触发
-    - cron: "*/5 1-6 * * 1-5"
-    # 港股盘中监控：UTC 01:30-08:00（港股 09:30-16:00），错开2分钟触发
-    - cron: "2-59/5 1-7 * * 1-5"
-    # 美股盘中监控：UTC 13:30-21:00（EDT/EST 均覆盖），错开4分钟触发
-    - cron: "4-59/5 13-20 * * 1-5"
     # 条件2+3 —— A股收盘后30分钟（15:30 CST = 07:30 UTC）
     - cron: "30 7 * * 1-5"
     # 条件2+3 —— 港股收盘后30分钟（16:30 HKT = 08:30 UTC）
@@ -96,18 +90,6 @@ jobs:
           # 定时触发：直接用触发的 cron 表达式匹配模式，避免时间区间歧义
           echo "触发 cron：$TRIGGER_SCHEDULE"
           case "$TRIGGER_SCHEDULE" in
-            "*/5 1-6 * * 1-5")
-              echo "→ A股盘中监控"
-              python stock_monitor.py intraday_a
-              ;;
-            "2-59/5 1-7 * * 1-5")
-              echo "→ 港股盘中监控"
-              python stock_monitor.py intraday_hk
-              ;;
-            "4-59/5 13-20 * * 1-5")
-              echo "→ 美股盘中监控"
-              python stock_monitor.py intraday_us
-              ;;
             "30 7 * * 1-5")
               echo "→ A股收盘后检测"
               python stock_monitor.py close_a
