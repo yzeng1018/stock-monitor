@@ -3,8 +3,8 @@
 支持美股、港股、A股、加密货币
 
 运行模式：
-  intraday      - 盘中实时监控（每15分钟）：当日实时价 vs 昨日收盘 > ±5%，附近期新闻标题
-  close_a       - A股收盘后：条件2（30天新高/低）+ 条件3（量比）+ 条件4（MA20穿越）
+  intraday      - 盘中实时监控（每小时）：当日实时价 vs 昨日收盘 > ±8%，附近期新闻标题
+  close_a       - A股收盘后：条件2（90天新高/低）+ 条件3（量比 ≥ 2.5x）
   close_hk      - 港股收盘后：同上
   close_us      - 美股收盘后：同上
   close_crypto  - 加密货币每日快照检测：同上
@@ -834,7 +834,7 @@ def run_close_check(market):
             continue
         block = "\n".join([
             f"### {stock['name']}（{stock['symbol']}）",
-            f"市场：{stock['market']} | 收盘价：**{stock['price']}** | MA20：{stock.get('ma20', '-')}",
+            f"市场：{stock['market']} | 收盘价：**{stock['price']}**",
             f"近90天：{stock['min_90d']} ~ {stock['max_90d']} | 量比：{stock['vol_ratio']:.1f}x",
         ] + conditions)
         alert_blocks.append(block)
@@ -968,6 +968,50 @@ def get_news_summary(symbol, name, market):
         return _llm_complete([{"role": "user", "content": prompt}])
     except Exception as e:
         print(f"  WARNING  {symbol} Qwen摘要失败: {e}")
+        return "新闻摘要获取失败"
+
+
+def get_weekly_market_news(market):
+    """获取市场代表性新闻，用 Qwen 生成本周市场核心事件摘要"""
+    market_name = {"a": "A股", "hk": "港股", "us": "美股", "crypto": "加密货币"}[market]
+    news_texts = []
+    try:
+        if market == "a":
+            news_df = ak.stock_news_em(symbol="600519")
+            if news_df is not None and not news_df.empty:
+                for _, row in news_df.head(10).iterrows():
+                    title   = row.get("新闻标题", "")
+                    content = str(row.get("新闻内容", "") or "")
+                    text = f"- {title}"
+                    if content and content != "nan":
+                        text += f"\n  {content[:200]}"
+                    news_texts.append(text)
+        else:
+            proxy = {"hk": "2800.HK", "us": "SPY", "crypto": "BTC-USD"}[market]
+            for n in yf.Ticker(proxy).news[:10]:
+                if "content" in n and "title" in n["content"]:
+                    title   = n["content"]["title"]
+                    summary = n["content"].get("summary", "")
+                    text = f"- {title}"
+                    if summary:
+                        text += f"\n  {summary[:200]}"
+                    news_texts.append(text)
+    except Exception as e:
+        print(f"  WARNING  {market_name}市场新闻获取失败: {e}")
+
+    if not news_texts:
+        return "本周市场新闻暂无数据"
+
+    try:
+        prompt = (
+            f"以下是本周{market_name}市场的相关新闻：\n"
+            + "\n".join(news_texts)
+            + f"\n\n请用中文总结本周{market_name}市场的核心事件、主要驱动因素和市场情绪，"
+            "约200-300字，条理清晰，重点突出。"
+        )
+        return _llm_complete([{"role": "user", "content": prompt}], max_tokens=600)
+    except Exception as e:
+        print(f"  WARNING  {market_name}周报新闻摘要失败: {e}")
         return "新闻摘要获取失败"
 
 
@@ -1295,38 +1339,30 @@ def get_weekly_data(symbols, market):
     return results, failed
 
 
-def run_weekly_report(market, user=None):
+def run_weekly_report(market):
     """
-    周报：今日大盘 + 本周涨幅 Top5 / 跌幅 Top5。
-    user=None → owner (PushPlus)，user=dict → Email
+    Owner 专属周报：大盘+宏观 + 市场核心新闻（Qwen）+ 全量持仓周表现。
+    仅发邮件给 owner，不发微信，不推送给外部用户。
     """
     market_name = {"a": "A股", "hk": "港股", "us": "美股", "crypto": "加密货币"}[market]
-    tag = f"（{user['name']}）" if user else ""
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] 生成{market_name}周报{tag}...")
+    sym_map     = {"a": A_STOCKS, "hk": HK_STOCKS, "us": US_STOCKS, "crypto": CRYPTO_SYMBOLS}
+    symbols     = sym_map[market]
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] 生成{market_name}周报...")
 
-    if user:
-        sym_map = {
-            "a":      user.get("a_stocks")      or [],
-            "hk":     user.get("hk_stocks")     or [],
-            "us":     user.get("us_stocks")      or [],
-            "crypto": user.get("crypto_stocks") or [],
-        }
-    else:
-        sym_map = {"a": A_STOCKS, "hk": HK_STOCKS, "us": US_STOCKS, "crypto": CRYPTO_SYMBOLS}
+    indices      = get_market_indices(market)
+    indices_line = _format_indices(indices)
+    macro        = get_market_indices("macro")
+    macro_line   = _format_indices(macro)
 
-    symbols = sym_map[market]
-    if not symbols:
-        print(f"{market_name}周报无股票列表，跳过{tag}")
-        return
+    print(f"  获取{market_name}市场新闻摘要...")
+    market_news = get_weekly_market_news(market)
 
     stocks, failed = get_weekly_data(symbols, market_name)
     if not stocks:
-        print(f"{market_name}无周报数据{tag}")
+        print(f"{market_name}无周报数据")
         return
 
     stocks_sorted = sorted(stocks, key=lambda x: -x["week_change_pct"])
-    top_gainers   = stocks_sorted[:5]
-    top_losers    = stocks_sorted[-5:][::-1]
 
     table_header = (
         "| 股票 | 周初收盘 | 周末收盘 | 周涨跌幅 | 周振幅 |\n"
@@ -1343,38 +1379,35 @@ def run_weekly_report(market, user=None):
             f" | {s['week_low']} ~ {s['week_high']} |"
         )
 
-    indices      = get_market_indices(market)
-    indices_line = _format_indices(indices)
-
     now_str  = datetime.now().strftime('%Y-%m-%d %H:%M')
     week_str = datetime.now().strftime('%Y 第%W周')
-    title    = f"{market_name}周报 {datetime.now().strftime('%Y-%m-%d')}"
+    title    = f"📋 {market_name}周报 {datetime.now().strftime('%Y-%m-%d')}"
 
     sections = [
-        f"## {market_name}周报（{week_str}，{now_str}）\n**今日大盘：** {indices_line}",
-        f"### 本周涨幅 Top5\n{table_header}\n" + "\n".join(_row(s) for s in top_gainers),
-        f"### 本周跌幅 Top5\n{table_header}\n" + "\n".join(_row(s) for s in top_losers),
+        "\n".join([
+            f"## {market_name}周报（{week_str}，{now_str}）",
+            f"**今日大盘：** {indices_line}",
+            f"**汇率/宏观：** {macro_line}",
+        ]),
+        f"### 本周市场核心事件\n{market_news}",
+        f"### 持仓本周表现（{len(stocks_sorted)} 支，按涨跌幅排序）\n{table_header}\n"
+        + "\n".join(_row(s) for s in stocks_sorted),
     ]
     if failed:
         sections.append(f"---\n**数据获取失败（{len(failed)} 支）：** {', '.join(failed)}")
 
-    content = "\n\n".join(sections)
+    content = "\n\n---\n\n".join(sections)
 
-    if user:
-        send_email(user["email"], title, content)
+    if OWNER_EMAIL:
+        send_email(OWNER_EMAIL, title, content)
     else:
-        send_to_wechat(title, content)
-        if OWNER_EMAIL:
-            send_email(OWNER_EMAIL, title, content)
-
-    print(f"{market_name}周报已推送{tag}，共 {len(stocks)} 支，失败 {len(failed)} 支")
+        print("WARNING: OWNER_EMAIL 未配置，周报无法发送")
+    print(f"{market_name}周报已发送，共 {len(stocks)} 支，失败 {len(failed)} 支")
 
 
 def run_weekly_report_all(market):
-    """依次为 owner 和所有 users.json 用户生成并推送周报"""
+    """生成并发送 owner 周报（仅 owner，不推外部用户）"""
     run_weekly_report(market)
-    for user in load_users():
-        run_weekly_report(market, user=user)
 
 
 # ============================================================

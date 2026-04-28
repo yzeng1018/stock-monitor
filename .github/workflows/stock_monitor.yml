@@ -12,6 +12,11 @@ on:
     # - cron: "0 8 * * 1-5"   # A股日报
     # - cron: "0 9 * * 1-5"   # 港股日报
     # - cron: "0 22 * * 1-5"  # 美股日报
+    # 周报 —— 每周五收盘后
+    - cron: "0 9 * * 5"    # A股周报（17:00 CST）
+    - cron: "30 9 * * 5"   # 港股周报（17:30 HKT）
+    - cron: "0 23 * * 5"   # 美股周报（19:00 EST）
+    - cron: "30 23 * * 5"  # 加密货币周报
 
   workflow_dispatch:
     inputs:
@@ -108,6 +113,22 @@ jobs:
             #   python stock_monitor.py daily_hk ;;
             # "0 22 * * 1-5")  # 美股日报（已暂停）
             #   python stock_monitor.py daily_us ;;
+            "0 9 * * 5")
+              echo "→ A股周报"
+              python stock_monitor.py weekly_a
+              ;;
+            "30 9 * * 5")
+              echo "→ 港股周报"
+              python stock_monitor.py weekly_hk
+              ;;
+            "0 23 * * 5")
+              echo "→ 美股周报"
+              python stock_monitor.py weekly_us
+              ;;
+            "30 23 * * 5")
+              echo "→ 加密货币周报"
+              python stock_monitor.py weekly_crypto
+              ;;
             *)
               echo "未知触发 cron：$TRIGGER_SCHEDULE"
               exit 1
