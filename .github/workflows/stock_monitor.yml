@@ -8,12 +8,10 @@ on:
     - cron: "30 8 * * 1-5"
     # 条件2+3 —— 美股收盘后30分钟（16:30 EST = 21:30 UTC）
     - cron: "30 21 * * 1-5"
-    # 日报 —— A股收盘后1小时（16:00 CST = 08:00 UTC）
-    - cron: "0 8 * * 1-5"
-    # 日报 —— 港股收盘后1小时（17:00 HKT = 09:00 UTC）
-    - cron: "0 9 * * 1-5"
-    # 日报 —— 美股收盘后1小时（17:00 EST = 22:00 UTC）
-    - cron: "0 22 * * 1-5"
+    # 日报已暂停
+    # - cron: "0 8 * * 1-5"   # A股日报
+    # - cron: "0 9 * * 1-5"   # 港股日报
+    # - cron: "0 22 * * 1-5"  # 美股日报
 
   workflow_dispatch:
     inputs:
@@ -77,6 +75,8 @@ jobs:
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          GATEWAY_URL: https://gateway.asksidra.com/v1
+          GATEWAY_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
           MANUAL_MODE: ${{ github.event.inputs.mode }}
           TRIGGER_SCHEDULE: ${{ github.event.schedule }}
         run: |
@@ -102,20 +102,24 @@ jobs:
               echo "→ 美股收盘后检测"
               python stock_monitor.py close_us
               ;;
-            "0 8 * * 1-5")
-              echo "→ A股日报"
-              python stock_monitor.py daily_a
-              ;;
-            "0 9 * * 1-5")
-              echo "→ 港股日报"
-              python stock_monitor.py daily_hk
-              ;;
-            "0 22 * * 1-5")
-              echo "→ 美股日报"
-              python stock_monitor.py daily_us
-              ;;
+            # "0 8 * * 1-5")   # A股日报（已暂停）
+            #   python stock_monitor.py daily_a ;;
+            # "0 9 * * 1-5")   # 港股日报（已暂停）
+            #   python stock_monitor.py daily_hk ;;
+            # "0 22 * * 1-5")  # 美股日报（已暂停）
+            #   python stock_monitor.py daily_us ;;
             *)
               echo "未知触发 cron：$TRIGGER_SCHEDULE"
               exit 1
               ;;
           esac
+
+      - name: 提交 usage 日志
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/usage.jsonl 2>/dev/null || true
+          git diff --cached --quiet && exit 0
+          git commit -m "chore: log AI usage [skip ci]"
+          git pull --rebase origin main && git push || true

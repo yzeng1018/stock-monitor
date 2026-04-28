@@ -58,8 +58,8 @@ SMTP_USER     = os.environ.get("SMTP_USER", "")
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 OWNER_EMAIL   = os.environ.get("OWNER_EMAIL", "") or os.environ.get("SMTP_USER", "")
 
-PRICE_CHANGE_THRESHOLD = 5.0  # 盘中涨跌幅阈值（%）
-VOLUME_MULTIPLIER      = 1.8  # 收盘后成交量倍数阈值
+PRICE_CHANGE_THRESHOLD = 8.0  # 盘中涨跌幅阈值（%）
+VOLUME_MULTIPLIER      = 2.5  # 收盘后成交量倍数阈值
 
 _SCRIPT_DIR        = os.path.dirname(os.path.abspath(__file__))
 ALERTED_TODAY_FILE = os.path.join(_SCRIPT_DIR, "alerted_today.json")
@@ -604,17 +604,17 @@ def get_close_data_us(symbols):
     """并发获取美股收盘价 + 历史数据（用于条件2/3/4），返回 (results, failed)"""
     def _fetch(symbol):
         try:
-            hist = yf.Ticker(symbol).history(period="60d")
-            if hist.empty or len(hist) < 22:
+            hist = yf.Ticker(symbol).history(period="130d")
+            if hist.empty or len(hist) < 91:
                 return None
             current_price = float(hist["Close"].iloc[-1])
             prev_close    = float(hist["Close"].iloc[-2])
             current_vol   = float(hist["Volume"].iloc[-1])
-            hist_30       = hist.iloc[-31:-1]
-            avg_vol_30    = float(hist_30["Volume"].mean())
-            max_price_30  = float(hist_30["Close"].max())
-            min_price_30  = float(hist_30["Close"].min())
-            vol_ratio     = current_vol / avg_vol_30 if avg_vol_30 > 0 else 0
+            hist_90       = hist.iloc[-91:-1]
+            avg_vol_90    = float(hist_90["Volume"].mean())
+            max_price_90  = float(hist_90["Close"].max())
+            min_price_90  = float(hist_90["Close"].min())
+            vol_ratio     = current_vol / avg_vol_90 if avg_vol_90 > 0 else 0
             ma20          = float(hist["Close"].iloc[-20:].mean())
             prev_ma20     = float(hist["Close"].iloc[-21:-1].mean())
             return {
@@ -623,10 +623,10 @@ def get_close_data_us(symbols):
                 "price":      round(current_price, 3),
                 "prev_close": round(prev_close, 3),
                 "volume":     int(current_vol),
-                "avg_vol_30": int(avg_vol_30),
+                "avg_vol_90": int(avg_vol_90),
                 "vol_ratio":  round(vol_ratio, 2),
-                "max_30d":    round(max_price_30, 3),
-                "min_30d":    round(min_price_30, 3),
+                "max_90d":    round(max_price_90, 3),
+                "min_90d":    round(min_price_90, 3),
                 "ma20":       round(ma20, 3),
                 "prev_ma20":  round(prev_ma20, 3),
                 "market":     "美股",
@@ -652,17 +652,17 @@ def get_close_data_hk():
     def _fetch(sym):
         code_4d = f"{int(sym.replace('.HK', '')):04d}.HK"
         try:
-            hist = yf.Ticker(code_4d).history(period="60d")
-            if hist.empty or len(hist) < 22:
+            hist = yf.Ticker(code_4d).history(period="130d")
+            if hist.empty or len(hist) < 91:
                 return None
             current_price = float(hist["Close"].iloc[-1])
             prev_close    = float(hist["Close"].iloc[-2])
             current_vol   = float(hist["Volume"].iloc[-1])
-            hist_30       = hist.iloc[-31:-1]
-            avg_vol_30    = float(hist_30["Volume"].mean())
-            max_price_30  = float(hist_30["Close"].max())
-            min_price_30  = float(hist_30["Close"].min())
-            vol_ratio     = current_vol / avg_vol_30 if avg_vol_30 > 0 else 0
+            hist_90       = hist.iloc[-91:-1]
+            avg_vol_90    = float(hist_90["Volume"].mean())
+            max_price_90  = float(hist_90["Close"].max())
+            min_price_90  = float(hist_90["Close"].min())
+            vol_ratio     = current_vol / avg_vol_90 if avg_vol_90 > 0 else 0
             ma20          = float(hist["Close"].iloc[-20:].mean())
             prev_ma20     = float(hist["Close"].iloc[-21:-1].mean())
             return {
@@ -671,10 +671,10 @@ def get_close_data_hk():
                 "price":      round(current_price, 3),
                 "prev_close": round(prev_close, 3),
                 "volume":     int(current_vol),
-                "avg_vol_30": int(avg_vol_30),
+                "avg_vol_90": int(avg_vol_90),
                 "vol_ratio":  round(vol_ratio, 2),
-                "max_30d":    round(max_price_30, 3),
-                "min_30d":    round(min_price_30, 3),
+                "max_90d":    round(max_price_90, 3),
+                "min_90d":    round(min_price_90, 3),
                 "ma20":       round(ma20, 3),
                 "prev_ma20":  round(prev_ma20, 3),
                 "market":     "港股",
@@ -700,17 +700,17 @@ def get_close_data_a():
     def _fetch(code):
         yf_sym = f"{code}.SS" if code.startswith("6") else f"{code}.SZ"
         try:
-            hist = yf.Ticker(yf_sym).history(period="60d")
-            if hist.empty or len(hist) < 22:
+            hist = yf.Ticker(yf_sym).history(period="130d")
+            if hist.empty or len(hist) < 91:
                 return None
             current_price = float(hist["Close"].iloc[-1])
             prev_close    = float(hist["Close"].iloc[-2])
             current_vol   = float(hist["Volume"].iloc[-1])
-            hist_30       = hist.iloc[-31:-1]
-            avg_vol_30    = float(hist_30["Volume"].mean())
-            max_price_30  = float(hist_30["Close"].max())
-            min_price_30  = float(hist_30["Close"].min())
-            vol_ratio     = current_vol / avg_vol_30 if avg_vol_30 > 0 else 0
+            hist_90       = hist.iloc[-91:-1]
+            avg_vol_90    = float(hist_90["Volume"].mean())
+            max_price_90  = float(hist_90["Close"].max())
+            min_price_90  = float(hist_90["Close"].min())
+            vol_ratio     = current_vol / avg_vol_90 if avg_vol_90 > 0 else 0
             ma20          = float(hist["Close"].iloc[-20:].mean())
             prev_ma20     = float(hist["Close"].iloc[-21:-1].mean())
             return {
@@ -719,10 +719,10 @@ def get_close_data_a():
                 "price":      round(current_price, 3),
                 "prev_close": round(prev_close, 3),
                 "volume":     int(current_vol),
-                "avg_vol_30": int(avg_vol_30),
+                "avg_vol_90": int(avg_vol_90),
                 "vol_ratio":  round(vol_ratio, 2),
-                "max_30d":    round(max_price_30, 3),
-                "min_30d":    round(min_price_30, 3),
+                "max_90d":    round(max_price_90, 3),
+                "min_90d":    round(min_price_90, 3),
                 "ma20":       round(ma20, 3),
                 "prev_ma20":  round(prev_ma20, 3),
                 "market":     "A股",
@@ -747,17 +747,17 @@ def get_close_data_crypto():
     """获取加密货币历史数据（用于条件2/3/4），返回 (results, failed)"""
     def _fetch(symbol):
         try:
-            hist = yf.Ticker(symbol).history(period="60d")
-            if hist.empty or len(hist) < 22:
+            hist = yf.Ticker(symbol).history(period="130d")
+            if hist.empty or len(hist) < 91:
                 return None
             current_price = float(hist["Close"].iloc[-1])
             prev_close    = float(hist["Close"].iloc[-2])
             current_vol   = float(hist["Volume"].iloc[-1])
-            hist_30       = hist.iloc[-31:-1]
-            avg_vol_30    = float(hist_30["Volume"].mean())
-            max_price_30  = float(hist_30["Close"].max())
-            min_price_30  = float(hist_30["Close"].min())
-            vol_ratio     = current_vol / avg_vol_30 if avg_vol_30 > 0 else 0
+            hist_90       = hist.iloc[-91:-1]
+            avg_vol_90    = float(hist_90["Volume"].mean())
+            max_price_90  = float(hist_90["Close"].max())
+            min_price_90  = float(hist_90["Close"].min())
+            vol_ratio     = current_vol / avg_vol_90 if avg_vol_90 > 0 else 0
             ma20          = float(hist["Close"].iloc[-20:].mean())
             prev_ma20     = float(hist["Close"].iloc[-21:-1].mean())
             return {
@@ -766,10 +766,10 @@ def get_close_data_crypto():
                 "price":      round(current_price, 6),
                 "prev_close": round(prev_close, 6),
                 "volume":     int(current_vol),
-                "avg_vol_30": int(avg_vol_30),
+                "avg_vol_90": int(avg_vol_90),
                 "vol_ratio":  round(vol_ratio, 2),
-                "max_30d":    round(max_price_30, 6),
-                "min_30d":    round(min_price_30, 6),
+                "max_90d":    round(max_price_90, 6),
+                "min_90d":    round(min_price_90, 6),
                 "ma20":       round(ma20, 6),
                 "prev_ma20":  round(prev_ma20, 6),
                 "market":     "加密货币",
@@ -791,35 +791,22 @@ def get_close_data_crypto():
 
 
 def check_close_alerts(stock):
-    """检查条件2（30天新高/低）+ 条件3（成交量异常）+ 条件4（MA20穿越）"""
+    """检查条件2（90天新高/低）+ 条件3（成交量异常）"""
     triggered = []
-    price      = stock["price"]
-    prev_close = stock.get("prev_close")
-    ma20       = stock.get("ma20")
-    prev_ma20  = stock.get("prev_ma20")
+    price = stock["price"]
 
-    if price >= stock["max_30d"]:
-        triggered.append(f"[peak] 条件2 收盘创近30天新高：{price} >= 30日最高 {stock['max_30d']}")
-    elif price <= stock["min_30d"]:
-        triggered.append(f"[trough] 条件2 收盘创近30天新低：{price} <= 30日最低 {stock['min_30d']}")
+    if price >= stock["max_90d"]:
+        triggered.append(f"[peak] 条件2 收盘创近90天新高：{price} >= 90日最高 {stock['max_90d']}")
+    elif price <= stock["min_90d"]:
+        triggered.append(f"[trough] 条件2 收盘创近90天新低：{price} <= 90日最低 {stock['min_90d']}")
 
     if stock["vol_ratio"] >= VOLUME_MULTIPLIER:
         triggered.append(
             f"[fire] 条件3 成交量异常：今日 {stock['volume']:,}，"
-            f"是30日均量的 {stock['vol_ratio']:.1f} 倍（阈值 {VOLUME_MULTIPLIER}x）"
+            f"是90日均量的 {stock['vol_ratio']:.1f} 倍（阈值 {VOLUME_MULTIPLIER}x）"
         )
 
-    if prev_close is not None and ma20 is not None and prev_ma20 is not None:
-        if prev_close < prev_ma20 and price >= ma20:
-            triggered.append(
-                f"[cross-up] 条件4 上穿MA20：昨收 {prev_close} < 昨日MA20 {prev_ma20:.3f}，"
-                f"今收 {price} >= 今日MA20 {ma20:.3f}"
-            )
-        elif prev_close > prev_ma20 and price <= ma20:
-            triggered.append(
-                f"[cross-down] 条件4 下穿MA20：昨收 {prev_close} > 昨日MA20 {prev_ma20:.3f}，"
-                f"今收 {price} <= 今日MA20 {ma20:.3f}"
-            )
+    # 条件4 MA20穿越已禁用
 
     return triggered
 
@@ -848,7 +835,7 @@ def run_close_check(market):
         block = "\n".join([
             f"### {stock['name']}（{stock['symbol']}）",
             f"市场：{stock['market']} | 收盘价：**{stock['price']}** | MA20：{stock.get('ma20', '-')}",
-            f"近30天：{stock['min_30d']} ~ {stock['max_30d']} | 量比：{stock['vol_ratio']:.1f}x",
+            f"近90天：{stock['min_90d']} ~ {stock['max_90d']} | 量比：{stock['vol_ratio']:.1f}x",
         ] + conditions)
         alert_blocks.append(block)
 
@@ -891,6 +878,30 @@ def _get_qwen_client():
     return _qwen_client
 
 
+_USAGE_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "usage.jsonl")
+
+def _log_usage(provider: str, model: str, resp) -> None:
+    try:
+        from datetime import datetime, timezone
+        os.makedirs(os.path.dirname(_USAGE_LOG), exist_ok=True)
+        u = resp.usage if resp.usage else type("u", (), {"prompt_tokens": 0, "completion_tokens": 0})()
+        record = {
+            "ts":            datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "provider":      provider,
+            "model":         model,
+            "project":       "stock-monitor",
+            "input_tokens":  u.prompt_tokens,
+            "output_tokens": u.completion_tokens,
+            "cost_usd":      0,
+            "latency_ms":    0,
+            "status":        "success",
+        }
+        with open(_USAGE_LOG, "a") as f:
+            f.write(json.dumps(record) + "\n")
+    except Exception:
+        pass
+
+
 def _llm_complete(messages: list, max_tokens: int = 600, temperature: float = 0.3) -> str:
     """Call LLM via local gateway; fall back to Qwen/DashScope if gateway offline."""
     try:
@@ -898,6 +909,7 @@ def _llm_complete(messages: list, max_tokens: int = 600, temperature: float = 0.
         resp = client.chat.completions.create(
             model="auto", messages=messages, max_tokens=max_tokens, temperature=temperature
         )
+        _log_usage("gateway", "auto", resp)
         return resp.choices[0].message.content.strip()
     except openai.APIConnectionError:
         client = _get_qwen_client()
@@ -906,6 +918,7 @@ def _llm_complete(messages: list, max_tokens: int = 600, temperature: float = 0.
         resp = client.chat.completions.create(
             model="qwen-plus", messages=messages, max_tokens=max_tokens, temperature=temperature
         )
+        _log_usage("qwen", "qwen-plus", resp)
         return resp.choices[0].message.content.strip()
 
 
