@@ -77,11 +77,10 @@ jobs:
       - name: 判断运行模式并执行
         env:
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
-          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          GATEWAY_URL: https://gateway.asksidra.com/v1
-          GATEWAY_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           MANUAL_MODE: ${{ github.event.inputs.mode }}
           TRIGGER_SCHEDULE: ${{ github.event.schedule }}
         run: |

@@ -862,21 +862,13 @@ def run_close_check(market):
 # 模式四/五/六：日报（大盘指数 + 个股 + Qwen新闻摘要）
 # ============================================================
 
-GATEWAY_URL     = os.environ.get("GATEWAY_URL", "http://localhost:8000/v1")
-GATEWAY_API_KEY = os.environ.get("GATEWAY_API_KEY", "dummy")
-_DASHSCOPE_URL  = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+# Groq 主力（qwen-qwq-32b，免费，质量 9.0，中文 9.0）
+_GROQ_URL   = "https://api.groq.com/openai/v1"
+_GROQ_MODEL = "qwen-qwq-32b"
 
-_qwen_client = None
-
-def _get_qwen_client():
-    global _qwen_client
-    if _qwen_client is None and DASHSCOPE_API_KEY:
-        _qwen_client = openai.OpenAI(
-            api_key=DASHSCOPE_API_KEY,
-            base_url=_DASHSCOPE_URL,
-        )
-    return _qwen_client
-
+# 智谱 GLM 兜底（glm-4.7-flash，永久免费无上限）
+_ZHIPU_URL   = "https://open.bigmodel.cn/api/paas/v4"
+_ZHIPU_MODEL = "glm-4.7-flash"
 
 _USAGE_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "usage.jsonl")
 
@@ -903,23 +895,28 @@ def _log_usage(provider: str, model: str, resp) -> None:
 
 
 def _llm_complete(messages: list, max_tokens: int = 600, temperature: float = 0.3) -> str:
-    """Call LLM via local gateway; fall back to Qwen/DashScope if gateway offline."""
-    try:
-        client = openai.OpenAI(api_key=GATEWAY_API_KEY, base_url=GATEWAY_URL)
-        resp = client.chat.completions.create(
-            model="auto", messages=messages, max_tokens=max_tokens, temperature=temperature
-        )
-        _log_usage("gateway", "auto", resp)
-        return resp.choices[0].message.content.strip()
-    except openai.APIConnectionError:
-        client = _get_qwen_client()
-        if client is None:
-            raise RuntimeError("Gateway offline and DASHSCOPE_API_KEY not configured")
-        resp = client.chat.completions.create(
-            model="qwen-plus", messages=messages, max_tokens=max_tokens, temperature=temperature
-        )
-        _log_usage("qwen", "qwen-plus", resp)
-        return resp.choices[0].message.content.strip()
+    """Call LLM directly: Groq qwen-qwq-32b → 智谱 glm-4.7-flash fallback."""
+    groq_key = os.environ.get("GROQ_API_KEY", "")
+    if groq_key:
+        try:
+            client = openai.OpenAI(api_key=groq_key, base_url=_GROQ_URL)
+            resp = client.chat.completions.create(
+                model=_GROQ_MODEL, messages=messages, max_tokens=max_tokens, temperature=temperature
+            )
+            _log_usage("groq", _GROQ_MODEL, resp)
+            return resp.choices[0].message.content.strip()
+        except Exception:
+            pass
+
+    zhipu_key = os.environ.get("ZHIPU_API_KEY", "")
+    if not zhipu_key:
+        raise RuntimeError("未配置 GROQ_API_KEY 或 ZHIPU_API_KEY")
+    client = openai.OpenAI(api_key=zhipu_key, base_url=_ZHIPU_URL)
+    resp = client.chat.completions.create(
+        model=_ZHIPU_MODEL, messages=messages, max_tokens=max_tokens, temperature=temperature
+    )
+    _log_usage("zhipu", _ZHIPU_MODEL, resp)
+    return resp.choices[0].message.content.strip()
 
 
 def get_news_summary(symbol, name, market):
