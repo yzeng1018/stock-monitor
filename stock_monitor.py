@@ -862,13 +862,13 @@ def run_close_check(market):
 # 模式四/五/六：日报（大盘指数 + 个股 + Qwen新闻摘要）
 # ============================================================
 
-# Groq 主力（qwen-qwq-32b，免费，质量 9.0，中文 9.0）
+# Groq 主力（默认 qwen-qwq-32b，可通过 GitHub Variable PRIMARY_MODEL 覆盖）
 _GROQ_URL   = "https://api.groq.com/openai/v1"
-_GROQ_MODEL = "qwen-qwq-32b"
+_GROQ_MODEL = os.environ.get("PRIMARY_MODEL", "qwen-qwq-32b")
 
-# 智谱 GLM 兜底（glm-4.7-flash，永久免费无上限）
+# 智谱 GLM 兜底（默认 glm-4.7-flash，可通过 GitHub Variable FALLBACK_MODEL 覆盖）
 _ZHIPU_URL   = "https://open.bigmodel.cn/api/paas/v4"
-_ZHIPU_MODEL = "glm-4.7-flash"
+_ZHIPU_MODEL = os.environ.get("FALLBACK_MODEL", "glm-4.7-flash")
 
 _USAGE_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "usage.jsonl")
 

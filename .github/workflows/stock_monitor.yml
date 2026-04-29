@@ -78,6 +78,8 @@ jobs:
         env:
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
           ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
+          PRIMARY_MODEL: ${{ vars.PRIMARY_MODEL }}
+          FALLBACK_MODEL: ${{ vars.FALLBACK_MODEL }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
